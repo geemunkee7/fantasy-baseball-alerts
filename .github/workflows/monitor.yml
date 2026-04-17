@@ -2,7 +2,7 @@ name: Fantasy Baseball Monitor
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/10 6-23 * * *'
   workflow_dispatch:
 
 jobs:
@@ -18,7 +18,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install yfpy requests feedparser
+        run: pip install yfpy requests feedparser tzdata
 
       - name: Write Yahoo token file
         run: echo "${{ secrets.YAHOO_ENV_TOKEN }}" > .env
