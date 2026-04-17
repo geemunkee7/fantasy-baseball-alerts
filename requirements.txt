@@ -1,0 +1,4 @@
+yfpy
+requests
+feedparser
+tzdata
