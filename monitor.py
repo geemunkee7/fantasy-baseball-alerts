@@ -24,11 +24,7 @@ MY_TEAM_ID          = 10
 ET_TZ               = ZoneInfo("America/New_York")
 MIN_EXPECTED_ROSTERED = 100
 
-# Persistent state file — stores morning probable pitchers
-# Uses Railway's ephemeral disk (/tmp is writable)
-PROBABLES_FILE = '/tmp/morning_probables.json'
-
-# Daily deduplication file for batter sitting alerts
+PROBABLES_FILE      = '/tmp/morning_probables.json'
 SITTING_ALERTS_FILE = '/tmp/sitting_alerts.json'
 
 # ============================================================
@@ -43,7 +39,6 @@ TOP_15_SS = [
 ]
 MY_SS            = ["gunnar henderson", "trea turner"]
 STRONG_POSITIONS = {'SS', '1B', 'OF'}
-
 COLON_FORMAT_SOURCES = {'Rotowire', 'MLB Trade Rumors'}
 
 NON_PLAYER_PREFIXES = {
@@ -83,7 +78,7 @@ SS_INJURY_KEYWORDS = [
 
 CLOSER_KEYWORDS = [
     'closer', 'closing role', 'save opportunity', 'saves role',
-    'ninth inning', 'closing duties', 'shut down', 'holds the closer',
+    'ninth inning', 'closing duties', 'holds the closer',
     'closing games', 'save situation'
 ]
 
@@ -98,6 +93,9 @@ ACTION_KEYWORDS = [
     'optioned', 'demoted', 'scratched', 'suspended'
 ]
 
+# ============================================================
+# NEWS SOURCES
+# ============================================================
 TIER1_SOURCES = [
     {"name": "Rotowire",         "url": "https://www.rotowire.com/baseball/rss.xml",         "type": "fantasy"},
     {"name": "MLB Trade Rumors", "url": "https://www.mlbtraderumors.com/feed",                "type": "transactions"},
@@ -105,9 +103,44 @@ TIER1_SOURCES = [
     {"name": "MLB.com Official", "url": "https://www.mlb.com/feeds/news/rss.xml",             "type": "news"},
     {"name": "MiLB Official",    "url": "https://www.milb.com/feeds/news/rss.xml",            "type": "prospects"},
 ]
+
 TIER2_SOURCES = [
     {"name": "r/fantasybaseball", "url": "https://www.reddit.com/r/fantasybaseball/new/.rss", "type": "reddit"},
     {"name": "r/baseball",        "url": "https://www.reddit.com/r/baseball/new/.rss",        "type": "reddit"},
+]
+
+# All 30 MLB team beat feeds — Tier 3
+TIER3_SOURCES = [
+    {"name": "MLB-orioles",       "url": "https://www.mlb.com/orioles/feeds/news/rss.xml",       "type": "team"},
+    {"name": "MLB-redsox",        "url": "https://www.mlb.com/red-sox/feeds/news/rss.xml",       "type": "team"},
+    {"name": "MLB-yankees",       "url": "https://www.mlb.com/yankees/feeds/news/rss.xml",       "type": "team"},
+    {"name": "MLB-rays",          "url": "https://www.mlb.com/rays/feeds/news/rss.xml",          "type": "team"},
+    {"name": "MLB-bluejays",      "url": "https://www.mlb.com/blue-jays/feeds/news/rss.xml",     "type": "team"},
+    {"name": "MLB-whitesox",      "url": "https://www.mlb.com/white-sox/feeds/news/rss.xml",     "type": "team"},
+    {"name": "MLB-guardians",     "url": "https://www.mlb.com/guardians/feeds/news/rss.xml",     "type": "team"},
+    {"name": "MLB-tigers",        "url": "https://www.mlb.com/tigers/feeds/news/rss.xml",        "type": "team"},
+    {"name": "MLB-royals",        "url": "https://www.mlb.com/royals/feeds/news/rss.xml",        "type": "team"},
+    {"name": "MLB-twins",         "url": "https://www.mlb.com/twins/feeds/news/rss.xml",         "type": "team"},
+    {"name": "MLB-astros",        "url": "https://www.mlb.com/astros/feeds/news/rss.xml",        "type": "team"},
+    {"name": "MLB-angels",        "url": "https://www.mlb.com/angels/feeds/news/rss.xml",        "type": "team"},
+    {"name": "MLB-athletics",     "url": "https://www.mlb.com/athletics/feeds/news/rss.xml",     "type": "team"},
+    {"name": "MLB-mariners",      "url": "https://www.mlb.com/mariners/feeds/news/rss.xml",      "type": "team"},
+    {"name": "MLB-rangers",       "url": "https://www.mlb.com/rangers/feeds/news/rss.xml",       "type": "team"},
+    {"name": "MLB-braves",        "url": "https://www.mlb.com/braves/feeds/news/rss.xml",        "type": "team"},
+    {"name": "MLB-marlins",       "url": "https://www.mlb.com/marlins/feeds/news/rss.xml",       "type": "team"},
+    {"name": "MLB-mets",          "url": "https://www.mlb.com/mets/feeds/news/rss.xml",          "type": "team"},
+    {"name": "MLB-phillies",      "url": "https://www.mlb.com/phillies/feeds/news/rss.xml",      "type": "team"},
+    {"name": "MLB-nationals",     "url": "https://www.mlb.com/nationals/feeds/news/rss.xml",     "type": "team"},
+    {"name": "MLB-cubs",          "url": "https://www.mlb.com/cubs/feeds/news/rss.xml",          "type": "team"},
+    {"name": "MLB-reds",          "url": "https://www.mlb.com/reds/feeds/news/rss.xml",          "type": "team"},
+    {"name": "MLB-brewers",       "url": "https://www.mlb.com/brewers/feeds/news/rss.xml",       "type": "team"},
+    {"name": "MLB-pirates",       "url": "https://www.mlb.com/pirates/feeds/news/rss.xml",       "type": "team"},
+    {"name": "MLB-cardinals",     "url": "https://www.mlb.com/cardinals/feeds/news/rss.xml",     "type": "team"},
+    {"name": "MLB-dbacks",        "url": "https://www.mlb.com/d-backs/feeds/news/rss.xml",       "type": "team"},
+    {"name": "MLB-rockies",       "url": "https://www.mlb.com/rockies/feeds/news/rss.xml",       "type": "team"},
+    {"name": "MLB-dodgers",       "url": "https://www.mlb.com/dodgers/feeds/news/rss.xml",       "type": "team"},
+    {"name": "MLB-padres",        "url": "https://www.mlb.com/padres/feeds/news/rss.xml",        "type": "team"},
+    {"name": "MLB-giants",        "url": "https://www.mlb.com/giants/feeds/news/rss.xml",        "type": "team"},
 ]
 
 # ============================================================
@@ -175,18 +208,15 @@ def strip_html(text):
     return re.sub('<[^<]+?>', '', str(text)).strip()
 
 # ============================================================
-# STATE PERSISTENCE — Morning Probables Storage
+# STATE PERSISTENCE
 # ============================================================
 def load_morning_probables():
-    """Load stored morning probable pitchers. Returns {} if not found or stale."""
     try:
         if not Path(PROBABLES_FILE).exists():
             return {}
         with open(PROBABLES_FILE, 'r') as f:
             data = json.load(f)
-        # Only valid if stored today
         if data.get('date') != date.today().isoformat():
-            print("  Morning probables file is from a previous day — ignoring")
             return {}
         return data.get('probables', {})
     except Exception as e:
@@ -194,23 +224,15 @@ def load_morning_probables():
         return {}
 
 def save_morning_probables(probables):
-    """Save today's morning probable pitchers to file."""
     try:
-        data = {
-            'date': date.today().isoformat(),
-            'probables': probables
-        }
+        data = {'date': date.today().isoformat(), 'probables': probables}
         with open(PROBABLES_FILE, 'w') as f:
             json.dump(data, f)
-        print(f"  Saved {len(probables)} morning probables to disk")
+        print(f"  Saved {len(probables)} morning probables")
     except Exception as e:
         print(f"  Could not save morning probables: {e}")
 
-# ============================================================
-# STATE PERSISTENCE — Sitting Alert Deduplication
-# ============================================================
 def load_sitting_alerts():
-    """Load today's already-sent sitting alerts to avoid duplicates."""
     try:
         if not Path(SITTING_ALERTS_FILE).exists():
             return {}
@@ -223,12 +245,8 @@ def load_sitting_alerts():
         return {}
 
 def save_sitting_alerts(alerted):
-    """Save today's sent sitting alerts."""
     try:
-        data = {
-            'date': date.today().isoformat(),
-            'alerted': alerted
-        }
+        data = {'date': date.today().isoformat(), 'alerted': alerted}
         with open(SITTING_ALERTS_FILE, 'w') as f:
             json.dump(data, f)
     except Exception as e:
@@ -294,8 +312,7 @@ def get_all_rosters():
             print(f"  ⚠️ Only {len(taken)} players — Yahoo may have failed")
             send_pushover(
                 "⚠️ SYSTEM WARNING",
-                f"Yahoo returned only {len(taken)} players. "
-                f"Alerts suppressed this run.",
+                f"Yahoo returned only {len(taken)} players. Alerts suppressed.",
                 priority=0
             )
             return None, None
@@ -345,7 +362,7 @@ def get_weak_positions(my_roster):
 def get_todays_schedule():
     try:
         today_str = date.today().strftime('%Y-%m-%d')
-        url  = (
+        url = (
             f"https://statsapi.mlb.com/api/v1/schedule"
             f"?sportId=1&date={today_str}&gameType=R"
             f"&hydrate=probablePitcher,lineups,status"
@@ -429,28 +446,97 @@ def get_probable_pitchers_with_matchups(start_date, end_date, team_ops):
         print(f"  Probable pitchers API error: {e}")
         return {}
 
-def get_pitcher_stats(player_id):
-    try:
-        url  = (f"https://statsapi.mlb.com/api/v1/people/{player_id}/stats"
-                f"?stats=season&group=pitching&season=2026")
-        data = requests.get(url, timeout=5).json()
-        for sg in data.get('stats', []):
-            for split in sg.get('splits', []):
-                s = split.get('stat', {})
-                try:
-                    return {
-                        'era':  float(s.get('era',  '99.99') or '99.99'),
-                        'whip': float(s.get('whip', '9.99')  or '9.99'),
-                        'k':    int(s.get('strikeOuts', 0)    or 0),
-                        'ip':   float(s.get('inningsPitched', '0') or '0'),
-                        'kbb':  float(s.get('strikeoutWalkRatio', '0') or '0'),
-                        'wins': int(s.get('wins', 0) or 0),
-                    }
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return {'era': 99.99, 'whip': 9.99, 'k': 0, 'ip': 0.0, 'kbb': 0.0, 'wins': 0}
+def get_pitcher_stats_blended(player_id):
+    """
+    Blended stats: early season = 80% prior year / 20% current.
+    Blend shifts toward current as season progresses.
+    """
+    today      = date.today()
+    season_start = date(today.year, 3, 20)
+    days_in     = (today - season_start).days
+
+    # Blend schedule
+    if days_in < 26:       # Before ~Apr 15: 80/20
+        w_prior, w_curr = 0.80, 0.20
+    elif days_in < 57:     # Apr 15 – May 15: 60/40
+        w_prior, w_curr = 0.60, 0.40
+    elif days_in < 103:    # May 15 – Jul 1: 35/65
+        w_prior, w_curr = 0.35, 0.65
+    else:                  # Jul 1+: 10/90
+        w_prior, w_curr = 0.10, 0.90
+
+    def fetch_stats(season):
+        try:
+            url  = (f"https://statsapi.mlb.com/api/v1/people/{player_id}/stats"
+                    f"?stats=season&group=pitching&season={season}")
+            data = requests.get(url, timeout=5).json()
+            for sg in data.get('stats', []):
+                for split in sg.get('splits', []):
+                    s = split.get('stat', {})
+                    try:
+                        return {
+                            'era':  float(s.get('era',  '99.99') or '99.99'),
+                            'whip': float(s.get('whip', '9.99')  or '9.99'),
+                            'k':    int(s.get('strikeOuts', 0)    or 0),
+                            'ip':   float(s.get('inningsPitched', '0') or '0'),
+                            'kbb':  float(s.get('strikeoutWalkRatio', '0') or '0'),
+                        }
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        return None
+
+    curr  = fetch_stats(today.year)
+    prior = fetch_stats(today.year - 1)
+
+    # If no prior year stats (rookie) use current only
+    if prior is None and curr is not None:
+        curr['blend_note'] = 'rookie/no prior stats'
+        return curr
+
+    # If no current stats use prior only
+    if curr is None and prior is not None:
+        prior['blend_note'] = 'no current stats yet'
+        return prior
+
+    # If neither — return default
+    if curr is None and prior is None:
+        return {'era': 99.99, 'whip': 9.99, 'k': 0, 'ip': 0.0, 'kbb': 0.0}
+
+    # Blend — use prior year IP as base for K projection
+    blended = {
+        'era':        round(prior['era']  * w_prior + curr['era']  * w_curr, 2),
+        'whip':       round(prior['whip'] * w_prior + curr['whip'] * w_curr, 2),
+        'kbb':        round(prior['kbb']  * w_prior + curr['kbb']  * w_curr, 2),
+        'k':          curr['k'],   # use actual current K count
+        'ip':         curr['ip'],  # use actual current IP
+        'blend_note': f"{int(w_prior*100)}% prior / {int(w_curr*100)}% current"
+    }
+    return blended
+
+def passes_spot_start_gate(stats, opp_ops):
+    """
+    Three-tier matchup matrix for spot start quality.
+    Soft offense  (OPS ≤ .690): ERA < 4.50, WHIP < 1.35, K/BB > 1.8
+    Medium offense(.691–.730):  ERA < 4.00, WHIP < 1.25, K/BB > 2.2
+    Hard offense  (OPS > .730): ERA < 3.50, WHIP < 1.15, K/BB > 2.8
+    Also requires minimum 15 IP in prior season or 5 IP current season.
+    """
+    era  = stats.get('era',  99)
+    whip = stats.get('whip',  9)
+    kbb  = stats.get('kbb',   0)
+    ip   = stats.get('ip',    0)
+
+    if ip < 5:
+        return False
+
+    if opp_ops <= 0.690:
+        return era < 4.50 and whip < 1.35 and kbb > 1.8
+    elif opp_ops <= 0.730:
+        return era < 4.00 and whip < 1.25 and kbb > 2.2
+    else:
+        return era < 3.50 and whip < 1.15 and kbb > 2.8
 
 def passes_quality_gate(stats, strict=True):
     if strict:
@@ -503,14 +589,9 @@ def extract_player_name(item):
     for candidate in candidates:
         if looks_like_player_name(candidate):
             return candidate
-
     return None
 
 def find_named_replacements(text, taken):
-    """
-    Scan article text for player names mentioned near closer/role keywords.
-    Returns list of (name, is_available) tuples.
-    """
     results = []
     pattern = r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b'
     candidates = re.findall(pattern, text)
@@ -521,22 +602,16 @@ def find_named_replacements(text, taken):
     for candidate in candidates:
         if not looks_like_player_name(candidate):
             continue
-        # Check if candidate appears near role context words
         idx = text.lower().find(candidate.lower())
         if idx == -1:
             continue
         surrounding = text[max(0, idx-100):idx+100].lower()
         if any(w in surrounding for w in role_context_words):
             norm = normalize_name(candidate)
-            is_available = norm not in taken
-            results.append((candidate, is_available))
+            results.append((candidate, norm not in taken))
     return results
 
 def get_actionability(item, taken):
-    """
-    Returns (is_actionable, alert_type, priority, player_name, extra_info).
-    extra_info contains additional context for smarter alert messages.
-    """
     if item['type'] == 'reddit':
         return False, '', 0, None, {}
 
@@ -555,7 +630,6 @@ def get_actionability(item, taken):
 
     extra = {}
 
-    # ── TIER A: Always actionable ──────────────────────────────
     if any(w in text for w in ['called up', 'promoted', 'recalled', 'debut', 'call-up']):
         return True, '🚀 CALLUP', 1, player, extra
 
@@ -566,46 +640,31 @@ def get_actionability(item, taken):
                                 'comes off il', 'off the il', 'cleared to return']):
         return True, '✅ IL RETURN', 1, player, extra
 
-    # ── TIER B: Injury — smarter logic ────────────────────────
     if any(w in text for w in ['placed on il', 'injured list',
                                 'day-to-day', 'goes on il', 'to the il']):
-
         full_text = item['title'] + ' ' + item['summary']
-
-        # Check if injured player was a closer
         is_closer_injury = any(w in text for w in CLOSER_KEYWORDS)
 
         if is_closer_injury:
-            # Look for named replacements in the article
-            replacements = find_named_replacements(full_text, taken)
-            available_replacements = [r for r in replacements if r[1]]
-            owned_replacements = [r for r in replacements if not r[1]]
-
-            extra['is_closer_injury'] = True
-            extra['available_replacements'] = available_replacements
-            extra['owned_replacements'] = owned_replacements
+            replacements            = find_named_replacements(full_text, taken)
+            available_replacements  = [r for r in replacements if r[1]]
+            owned_replacements      = [r for r in replacements if not r[1]]
+            extra['is_closer_injury']        = True
+            extra['available_replacements']  = available_replacements
+            extra['owned_replacements']      = owned_replacements
 
             if available_replacements:
-                # Specific player to grab
                 return True, '💾 SAVES OPP', 1, player, extra
-            elif owned_replacements:
-                # Named replacement but already owned — monitor situation
-                extra['watch_mode'] = True
-                return True, '💾 SAVES WATCH', 0, player, extra
             else:
-                # No replacement named yet — watch alert
                 extra['watch_mode'] = True
                 return True, '💾 SAVES WATCH', 0, player, extra
 
-        # Regular injury — only alert if role opportunity explicit
         opp_words = ['start', 'lineup', 'replac', 'fill', 'opportunit',
-                     'role', 'regular', 'everyday', 'every day',
-                     'platoon', 'takeover']
+                     'role', 'regular', 'everyday', 'every day', 'platoon', 'takeover']
         if any(w in text for w in opp_words):
             return True, '🚑 INJURY OPP', 1, player, extra
         return False, '', 0, None, {}
 
-    # ── TIER C: DFA ───────────────────────────────────────────
     if any(w in text for w in ['designated for assignment', 'dfa', 'outrighted']):
         callup_words = ['prospect', 'called up', 'promoted', 'minor league',
                         'aaa', 'triple-a', 'recall', 'top prospect']
@@ -613,7 +672,6 @@ def get_actionability(item, taken):
             return True, '🔄 DFA→CALLUP OPP', 1, player, extra
         return False, '', 0, None, {}
 
-    # ── TIER D: Trade ─────────────────────────────────────────
     if any(w in text for w in ['trade', 'acquired', 'traded']):
         role_words = ['everyday', 'starting', 'regular', 'lineup',
                       'closer', 'opportunit', 'full-time', 'every day']
@@ -624,8 +682,6 @@ def get_actionability(item, taken):
     return False, '', 0, None, {}
 
 def build_alert_message(alert_type, player, summary, source, extra):
-    """Build a smart, specific alert message based on alert type and context."""
-
     if alert_type == '💾 SAVES OPP':
         available = extra.get('available_replacements', [])
         if available:
@@ -633,13 +689,11 @@ def build_alert_message(alert_type, player, summary, source, extra):
             return (
                 f"{player} (closer) placed on IL.\n\n"
                 f"🎯 Grab NOW — {grab_names} available in your league "
-                f"and may inherit saves!\n\n"
-                f"Source: {source}"
+                f"and may inherit saves!\n\nSource: {source}"
             )
         return (
             f"{player} (closer) placed on IL.\n\n"
-            f"⚠️ Saves situation now open — check Cubs bullpen "
-            f"free agents in Yahoo!\n\n"
+            f"⚠️ Saves situation open — check bullpen free agents in Yahoo!\n\n"
             f"Source: {source}"
         )
 
@@ -650,31 +704,97 @@ def build_alert_message(alert_type, player, summary, source, extra):
             return (
                 f"{player} (closer) placed on IL.\n\n"
                 f"👀 MONITOR: {owned_names} mentioned as replacement "
-                f"but already owned in your league. Watch for further "
-                f"role clarification.\n\n"
+                f"but already owned. Watch for role clarification.\n\n"
                 f"Source: {source}"
             )
         return (
             f"{player} (closer) placed on IL.\n\n"
             f"👀 MONITOR: No replacement named yet. Watch for "
-            f"saves role announcement — could be a wire opportunity.\n\n"
-            f"Source: {source}"
+            f"saves role announcement.\n\nSource: {source}"
         )
 
     if alert_type == '🚑 INJURY OPP':
         return (
             f"{summary}\n\n"
             f"✅ {player} is AVAILABLE — role opportunity may exist. "
-            f"Check Yahoo for context.\n\n"
-            f"Source: {source}"
+            f"Check Yahoo.\n\nSource: {source}"
         )
 
-    # Default for all other alert types
     return f"{summary}\n\n✅ AVAILABLE — act now!\n\nSource: {source}"
 
 # ============================================================
-# ALERT: SATURDAY 8AM — 2-START PITCHERS (next week)
-# ALSO: FRIDAY 8PM — Preliminary 2-start intel
+# ALERT: SPOT START (Tue-Sat 9am) — 2-3 days ahead, blended stats
+# ============================================================
+def send_spot_start_alert(taken, my_roster):
+    print("Running spot start alert...")
+    today     = datetime.now(ET_TZ).date()
+    look_from = today + timedelta(days=1)
+    look_to   = today + timedelta(days=3)
+
+    team_ops     = get_team_batting_stats()
+    all_starters = get_probable_pitchers_with_matchups(look_from, look_to, team_ops)
+
+    available = {}
+    for name, info in all_starters.items():
+        if normalize_name(name) in taken:
+            continue
+        # Use blended stats
+        stats = get_pitcher_stats_blended(info['id'])
+        info['stats'] = stats
+        # Must pass matchup gate for at least one of their starts
+        opp_ops_list = info.get('opp_ops', [0.720])
+        passes = any(
+            passes_spot_start_gate(stats, ops)
+            for ops in opp_ops_list
+        )
+        if not passes:
+            print(f"  {name} failed spot start gate")
+            continue
+        available[name] = info
+
+    if not available:
+        print("  No quality spot starts found for next 3 days")
+        return
+
+    ranked = sorted(
+        available.items(),
+        key=lambda x: score_pitcher(x[1].get('stats', {})),
+        reverse=True
+    )[:3]
+
+    drops    = get_drop_candidates(my_roster, count=2)
+    drop_str = ' | '.join(
+        f"{p['name']} ({p['pct_owned']:.0f}%)" for p in drops
+    ) or "No obvious drops"
+
+    lines = [f"📅 Spot starts {look_from} – {look_to}:\n"]
+    for name, info in ranked:
+        s         = info['stats']
+        opponents = info.get('opponents', [])
+        opp_ops   = info.get('opp_ops', [])
+        dates     = info.get('dates', [])
+        blend     = s.get('blend_note', '')
+        stat_line = (
+            f"ERA {s['era']:.2f} | WHIP {s['whip']:.2f} | "
+            f"K/BB {s['kbb']:.1f}"
+            if s['ip'] >= 5 else "Limited stats"
+        )
+        matchups = ', '.join(
+            f"{d[5:]} vs {opp} {matchup_label(ops)}"
+            for d, opp, ops in zip(dates[:3], opponents[:3], opp_ops[:3])
+        )
+        lines.append(
+            f"• {name}\n"
+            f"  {stat_line} ({blend})\n"
+            f"  {matchups}"
+        )
+
+    lines.append(f"\n💀 Consider dropping:\n{drop_str}")
+    send_pushover("🎯 SPOT START OPTIONS", '\n'.join(lines), priority=0)
+
+# ============================================================
+# ALERT: SATURDAY 8AM — 2-START PITCHERS
+# ALERT: FRIDAY 8PM — Preliminary 2-start
 # ============================================================
 def send_two_start_alert(taken, my_roster, preliminary=False):
     label = "Friday preliminary" if preliminary else "Saturday full"
@@ -692,8 +812,7 @@ def send_two_start_alert(taken, my_roster, preliminary=False):
         if not preliminary:
             send_pushover(
                 "⚾ 2-START ALERT",
-                f"No confirmed 2-starters posted yet for {next_mon}.\n"
-                "Check back Sunday morning.",
+                f"No confirmed 2-starters yet for {next_mon}. Check back Sunday.",
                 priority=0
             )
         return
@@ -702,12 +821,11 @@ def send_two_start_alert(taken, my_roster, preliminary=False):
     for name, info in two_starters.items():
         if normalize_name(name) in taken:
             continue
-        stats = get_pitcher_stats(info['id'])
+        stats = get_pitcher_stats_blended(info['id'])
         info['stats'] = stats
         if not passes_quality_gate(stats, strict=True):
             continue
-        opp_ops_list = info.get('opp_ops', [0.720, 0.720])
-        if min(opp_ops_list) > 0.750:
+        if min(info.get('opp_ops', [0.720, 0.720])) > 0.750:
             continue
         quality_options[name] = info
 
@@ -715,8 +833,7 @@ def send_two_start_alert(taken, my_roster, preliminary=False):
         if not preliminary:
             send_pushover(
                 "⚾ 2-START ALERT",
-                f"No available 2-starters cleared quality + matchup filters "
-                f"for {next_mon}.",
+                f"No available 2-starters cleared quality + matchup filters for {next_mon}.",
                 priority=0
             )
         return
@@ -739,17 +856,16 @@ def send_two_start_alert(taken, my_roster, preliminary=False):
         dates     = info.get('dates', [])
         opponents = info.get('opponents', [])
         opp_ops   = info.get('opp_ops', [])
+        blend     = s.get('blend_note', '')
         stat_line = (
             f"ERA {s['era']:.2f} | WHIP {s['whip']:.2f} | "
-            f"{s['k']}K | K/BB {s['kbb']:.1f}"
-            if s['ip'] >= 5 else "No 2026 stats yet"
+            f"{s['k']}K | K/BB {s['kbb']:.1f} ({blend})"
+            if s['ip'] >= 5 else "Limited stats"
         )
         start_lines = []
         for i, (d, opp, ops) in enumerate(
                 zip(dates[:2], opponents[:2], opp_ops[:2])):
-            start_lines.append(
-                f"  Start {i+1}: {d[5:]} vs {opp} {matchup_label(ops)}"
-            )
+            start_lines.append(f"  Start {i+1}: {d[5:]} vs {opp} {matchup_label(ops)}")
         lines.append(f"• {name}\n  {stat_line}\n" + '\n'.join(start_lines))
 
     if not preliminary:
@@ -760,30 +876,28 @@ def send_two_start_alert(taken, my_roster, preliminary=False):
 
 # ============================================================
 # ALERT: STREAMING PITCHERS
-# Wed 8am, Thu 8am+8pm, Fri 8am+8pm, Sat 8am, Sun 8am
 # ============================================================
 def send_streaming_alert(taken, my_roster):
     print("Running streaming pitcher alert...")
-    today       = datetime.now(ET_TZ).date()
-    end_of_week = today + timedelta(days=(6 - today.weekday()))
-    team_ops    = get_team_batting_stats()
+    today        = datetime.now(ET_TZ).date()
+    end_of_week  = today + timedelta(days=(6 - today.weekday()))
+    team_ops     = get_team_batting_stats()
     all_starters = get_probable_pitchers_with_matchups(today, end_of_week, team_ops)
 
     available = {}
     for name, info in all_starters.items():
         if normalize_name(name) in taken:
             continue
-        s = get_pitcher_stats(info['id'])
+        s = get_pitcher_stats_blended(info['id'])
         info['stats'] = s
         if not passes_quality_gate(s, strict=False):
             continue
-        opp_ops_list = info.get('opp_ops', [0.720])
-        if min(opp_ops_list) > 0.750:
+        if min(info.get('opp_ops', [0.720])) > 0.750:
             continue
         available[name] = info
 
     if not available:
-        print("  No quality streaming options this window")
+        print("  No quality streaming options")
         return
 
     ranked = sorted(
@@ -813,12 +927,11 @@ def send_streaming_alert(taken, my_roster):
             f"{s['k']}K | K/BB {s['kbb']:.1f}\n"
             f"  vs {opp_str}"
         )
-
     lines.append(f"\n💀 Consider dropping:\n{drop_str}")
     send_pushover("🌊 STREAMING SP OPTIONS", '\n'.join(lines), priority=0)
 
 # ============================================================
-# ALERT: MON/TUE/FRI 8:50AM — WIRE DIGEST
+# ALERT: WIRE DIGEST (Mon/Tue/Fri 8:50am)
 # ============================================================
 def send_wire_digest(taken, my_roster):
     print("Running wire digest...")
@@ -842,9 +955,7 @@ def send_wire_digest(taken, my_roster):
                 for player in players:
                     try:
                         name = player.name.full
-                        pct  = float(
-                            getattr(player.percent_owned, 'value', 0) or 0
-                        )
+                        pct  = float(getattr(player.percent_owned, 'value', 0) or 0)
                         if normalize_name(name) in taken:
                             continue
                         available.append({'name': name, 'pct': pct, 'pos': pos})
@@ -871,9 +982,7 @@ def send_wire_digest(taken, my_roster):
         weak_str = ', '.join(weak_positions)
         lines    = [f"📋 Your weak spots: {weak_str}\n"]
         for i, r in enumerate(recommendations, 1):
-            lines.append(
-                f"{i}. {r['name']} ({r['pos']}, {r['pct']:.0f}% owned)"
-            )
+            lines.append(f"{i}. {r['name']} ({r['pos']}, {r['pct']:.0f}% owned)")
         lines.append(f"\n💀 Potential drops:\n{drop_str}")
         lines.append("\n📱 Check Yahoo for full stats before acting.")
         send_pushover("📋 WIRE DIGEST", '\n'.join(lines), priority=0)
@@ -882,11 +991,9 @@ def send_wire_digest(taken, my_roster):
         print(f"  Wire digest error: {e}")
 
 # ============================================================
-# ALERT: PITCHER SCRATCHED — FIXED VERSION
-# Only fires if pitcher WAS the morning probable and is now replaced
+# ALERT: PITCHER SCRATCHED (fixed — state-based)
 # ============================================================
 def store_morning_probables(games):
-    """Called once in the morning window to snapshot today's probables."""
     probables = {}
     for game in games:
         if game['status'] in ['Final', 'Game Over', 'Postponed', 'Suspended']:
@@ -900,14 +1007,11 @@ def store_morning_probables(games):
 
 def check_pitcher_scratched(my_roster, games):
     print("Checking pitcher scratches...")
-
-    # Load what we knew this morning
     morning_probables = load_morning_probables()
     if not morning_probables:
-        print("  No morning probables stored yet — skipping scratch check")
+        print("  No morning probables stored yet — skipping")
         return
 
-    # Build current probable map
     current_probables = {}
     for game in games:
         if game['status'] in ['Final', 'Game Over', 'Postponed', 'Suspended']:
@@ -917,7 +1021,6 @@ def check_pitcher_scratched(my_roster, games):
         if game['away_probable']:
             current_probables[game['away_team']] = game['away_probable']
 
-    # My active SPs
     my_sps = [
         p for p in my_roster
         if p['position'] == 'SP'
@@ -929,21 +1032,13 @@ def check_pitcher_scratched(my_roster, games):
         team_name = TEAM_NAME_MAP.get(sp['team_abbr'], '')
         if not team_name:
             continue
-
-        # Was this pitcher listed as THIS MORNING's probable?
         morning_starter = morning_probables.get(team_name, '')
         if normalize_name(morning_starter) != normalize_name(sp['name']):
-            # Was not the morning probable — skip, not a scratch
-            continue
-
-        # Is a DIFFERENT pitcher now listed?
+            continue  # Was not this morning's probable — not a scratch
         current_starter = current_probables.get(team_name, '')
         if not current_starter:
-            # No one listed now — game may be postponed or starter TBD
             continue
-
         if normalize_name(current_starter) != normalize_name(sp['name']):
-            # Confirmed scratch — different pitcher now listed
             send_pushover(
                 f"🚫 SCRATCH: {sp['name']}",
                 f"{sp['name']} was this morning's probable for {team_name} "
@@ -954,22 +1049,18 @@ def check_pitcher_scratched(my_roster, games):
             )
 
 # ============================================================
-# ALERT: BATTER SITTING + POSTPONED — WITH DEDUPLICATION
+# ALERT: BATTER SITTING + POSTPONED (with deduplication)
 # ============================================================
 def check_lineups_and_weather(my_roster, games):
     print("Checking lineups and postponements...")
-
-    # Load today's already-sent sitting alerts
     sitting_alerted = load_sitting_alerts()
-
     my_hitters = [
         p for p in my_roster
         if p['position'] not in ['SP', 'RP', 'P']
         and 'IL' not in (p['status'] or '')
         and p['selected_position'] not in ['BN', 'IL']
     ]
-
-    newly_alerted = dict(sitting_alerted)  # copy to update
+    newly_alerted = dict(sitting_alerted)
 
     for game in games:
         home_team     = game['home_team']
@@ -982,10 +1073,8 @@ def check_lineups_and_weather(my_roster, games):
             team_name = TEAM_NAME_MAP.get(hitter['team_abbr'], '')
             if not team_name or team_name not in (home_team, away_team):
                 continue
-
             player_key = normalize_name(hitter['name'])
 
-            # Postponement
             if status in ['Postponed', 'Suspended']:
                 if player_key not in sitting_alerted:
                     send_pushover(
@@ -998,10 +1087,8 @@ def check_lineups_and_weather(my_roster, games):
                     newly_alerted[player_key] = 'postponed'
                 continue
 
-            # Batter sitting
             if lineup_posted and status not in ['Final', 'Game Over', 'In Progress']:
                 if player_key in sitting_alerted:
-                    print(f"  Skip {hitter['name']} sitting — already alerted today")
                     continue
                 in_lineup = any(
                     normalize_name(hitter['name']) in normalize_name(lp)
@@ -1021,18 +1108,15 @@ def check_lineups_and_weather(my_roster, games):
     save_sitting_alerts(newly_alerted)
 
 # ============================================================
-# ALERT: SS INJURIES — Now part of breaking news (real-time)
-# This function handles SS-specific logic within news processing
+# SS INJURY DETECTION (real-time, built into news processing)
 # ============================================================
 def is_ss_injury_news(item):
-    """Returns (True, ss_name, is_mine) if this item is about a top SS injury."""
     text = (item['title'] + ' ' + item['summary']).lower()
     if not any(kw in text for kw in SS_INJURY_KEYWORDS):
         return False, None, False
     for ss in TOP_15_SS:
         if normalize_name(ss) in normalize_name(item['title'] + ' ' + item['summary']):
-            is_mine = normalize_name(ss) in MY_SS
-            return True, ss, is_mine
+            return True, ss, normalize_name(ss) in MY_SS
     return False, None, False
 
 # ============================================================
@@ -1067,7 +1151,8 @@ def fetch_feed(source, lookback_minutes=15):
                 })
             except Exception:
                 continue
-        print(f"  {source['name']}: {len(items)} items")
+        if items:
+            print(f"  {source['name']}: {len(items)} items")
         return items
     except Exception as e:
         print(f"  {source['name']} error: {e}")
@@ -1082,12 +1167,22 @@ def get_all_news(lookback_minutes=15):
     print("Checking Tier 1 sources...")
     for s in TIER1_SOURCES:
         items.extend(fetch_feed(s, lookback_minutes))
+
     if should_check_reddit():
         print("Checking Reddit (Tier 2)...")
         for s in TIER2_SOURCES:
             items.extend(fetch_feed(s, lookback_minutes))
     else:
         print("Skipping Reddit this run")
+
+    print("Checking Tier 3 (30 MLB team feeds)...")
+    tier3_count = 0
+    for s in TIER3_SOURCES:
+        new_items = fetch_feed(s, lookback_minutes)
+        items.extend(new_items)
+        tier3_count += len(new_items)
+    print(f"  Tier 3 total: {tier3_count} items across 30 teams")
+
     print(f"Total: {len(items)} raw items")
     return items
 
@@ -1100,7 +1195,7 @@ def process_news_alerts(news, taken, is_digest=False):
     alerted_ss      = set()
 
     for item in news:
-        # Check for SS injury — real-time regardless of other filters
+        # SS injury check — real-time
         ss_hit, ss_name, is_mine = is_ss_injury_news(item)
         if ss_hit and normalize_name(ss_name) not in alerted_ss:
             alerted_ss.add(normalize_name(ss_name))
@@ -1124,7 +1219,6 @@ def process_news_alerts(news, taken, is_digest=False):
 
         is_actionable, alert_type, priority, player, extra = \
             get_actionability(item, taken)
-
         if not is_actionable:
             continue
 
@@ -1166,8 +1260,7 @@ def process_news_alerts(news, taken, is_digest=False):
             )
             send_pushover(
                 f"{a['alert_type']}: {a['player']} [{a['source']}]",
-                msg,
-                a['priority']
+                msg, a['priority']
             )
         return len(actionable)
 
@@ -1186,7 +1279,6 @@ def main():
           f"{now_et.strftime('%H:%M ET %A')}")
     print(f"{'='*50}")
 
-    # Sleep window: 11pm–6:30am ET
     in_sleep = (
         hour_et >= 23
         or hour_et < 6
@@ -1194,29 +1286,29 @@ def main():
     )
 
     # ── TIME WINDOWS ────────────────────────────────────────────
-    overnight_digest_window = (hour_et == 6  and 30 <= minute_et < 45)
+    overnight_digest_window  = (hour_et == 6  and 30 <= minute_et < 45)
+    morning_probables_window = (hour_et == 8  and minute_et < 15)
+    two_start_saturday       = (weekday == 5  and hour_et == 8  and minute_et < 15)
+    two_start_friday_pm      = (weekday == 4  and hour_et == 20 and minute_et < 15)
 
-    # Morning probables snapshot: 8:00–8:15am ET
-    morning_probables_window = (hour_et == 8 and minute_et < 15)
-
-    # SS watchlist removed — now handled in real-time breaking news
-
-    # 2-start alerts
-    two_start_saturday  = (weekday == 5 and hour_et == 8  and minute_et < 15)
-    two_start_friday_pm = (weekday == 4 and hour_et == 20 and minute_et < 15)
+    # Spot start: Tue-Sat 9am
+    spot_start_window = (
+        hour_et == 9 and minute_et < 15
+        and weekday in [1, 2, 3, 4, 5]
+    )
 
     # Streaming: Wed 8am, Thu 8am+8pm, Fri 8am+8pm, Sat 8am, Sun 8am
     streaming_window = (
         hour_et in [8, 20] and minute_et < 15
         and (
-            weekday in [2, 3, 4, 5]  # Wed Thu Fri Sat — both 8am and 8pm
-            or (weekday == 6 and hour_et == 8)  # Sun 8am only
+            weekday in [2, 3, 4, 5]
+            or (weekday == 6 and hour_et == 8)
         )
-        and not (weekday == 2 and hour_et == 20)  # not Wed 8pm
-        and not (weekday == 5 and hour_et == 20)  # not Sat 8pm
+        and not (weekday == 2 and hour_et == 20)
+        and not (weekday == 5 and hour_et == 20)
     )
 
-    # Wire digest: Mon, Tue, Fri at 8:50am
+    # Wire digest: Mon, Tue, Fri 8:50am
     digest_window = (
         hour_et == 8 and 50 <= minute_et < 60
         and weekday in [0, 1, 4]
@@ -1237,7 +1329,6 @@ def main():
         (hour_et == 16 and 30 <= minute_et < 45)
     )
 
-    # Lazy-load rosters and schedule
     taken, my_roster, games = None, None, None
 
     # ── 6:30AM: OVERNIGHT DIGEST ────────────────────────────────
@@ -1246,36 +1337,44 @@ def main():
         overnight_news = get_all_news(lookback_minutes=450)
         taken, my_roster = get_all_rosters()
         if taken is None:
-            print("  Yahoo failed — skipping overnight digest")
+            print("  Yahoo failed — skipping")
         else:
             sent = process_news_alerts(overnight_news, taken, is_digest=True)
             if sent == 0:
-                print("  Nothing actionable overnight — no digest sent")
+                print("  Nothing actionable overnight")
 
-    # ── 8:00AM: STORE MORNING PROBABLES SNAPSHOT ────────────────
+    # ── 8:00AM: MORNING PROBABLES SNAPSHOT ──────────────────────
     if morning_probables_window:
-        print("\n--- STORING MORNING PROBABLES SNAPSHOT ---")
+        print("\n--- STORING MORNING PROBABLES ---")
         if games is None:
             games = get_todays_schedule()
         store_morning_probables(games)
 
-    # ── FRIDAY 8PM: PRELIMINARY 2-START ALERT ───────────────────
+    # ── FRIDAY 8PM: PRELIMINARY 2-START ─────────────────────────
     if two_start_friday_pm:
-        print("\n--- FRIDAY PRELIMINARY 2-START ALERT ---")
+        print("\n--- FRIDAY PRELIMINARY 2-START ---")
         if taken is None:
             taken, my_roster = get_all_rosters()
         if taken is not None:
             send_two_start_alert(taken, my_roster, preliminary=True)
 
-    # ── SATURDAY 8AM: FULL 2-START ALERT ────────────────────────
+    # ── SATURDAY 8AM: FULL 2-START ──────────────────────────────
     if two_start_saturday:
-        print("\n--- SATURDAY 2-START PITCHER ALERT ---")
+        print("\n--- SATURDAY 2-START ALERT ---")
         if taken is None:
             taken, my_roster = get_all_rosters()
         if taken is not None:
             send_two_start_alert(taken, my_roster, preliminary=False)
 
-    # ── STREAMING ALERT ─────────────────────────────────────────
+    # ── TUE-SAT 9AM: SPOT START ─────────────────────────────────
+    if spot_start_window:
+        print("\n--- SPOT START ALERT ---")
+        if taken is None:
+            taken, my_roster = get_all_rosters()
+        if taken is not None:
+            send_spot_start_alert(taken, my_roster)
+
+    # ── STREAMING ───────────────────────────────────────────────
     if streaming_window:
         print("\n--- STREAMING PITCHER ALERT ---")
         if taken is None:
@@ -1291,7 +1390,7 @@ def main():
         if taken is not None:
             send_wire_digest(taken, my_roster)
 
-    # ── PITCHER SCRATCH CHECK ───────────────────────────────────
+    # ── PITCHER SCRATCH ──────────────────────────────────────────
     if pitcher_scratch_window:
         print("\n--- PITCHER SCRATCH CHECK ---")
         if taken is None:
@@ -1301,7 +1400,7 @@ def main():
                 games = get_todays_schedule()
             check_pitcher_scratched(my_roster, games)
 
-    # ── LINEUP + WEATHER CHECK ──────────────────────────────────
+    # ── LINEUP + WEATHER ─────────────────────────────────────────
     if lineup_weather_window:
         print("\n--- LINEUP + WEATHER CHECK ---")
         if taken is None:
@@ -1311,7 +1410,7 @@ def main():
                 games = get_todays_schedule()
             check_lineups_and_weather(my_roster, games)
 
-    # ── BREAKING NEWS — AWAKE HOURS ONLY ────────────────────────
+    # ── BREAKING NEWS ────────────────────────────────────────────
     if not in_sleep and not overnight_digest_window:
         print("\n--- BREAKING NEWS CHECK ---")
         news = get_all_news(lookback_minutes=15)
