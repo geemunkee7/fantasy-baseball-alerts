@@ -26,6 +26,7 @@ MIN_EXPECTED_ROSTERED = 100
 
 PROBABLES_FILE      = '/tmp/morning_probables.json'
 SITTING_ALERTS_FILE = '/tmp/sitting_alerts.json'
+SEEN_ALERTS_FILE    = '/tmp/seen_alerts.json'
 
 # ============================================================
 # CONSTANTS
@@ -124,8 +125,7 @@ TOP_PROSPECTS = {
     "landon knack", "james outman", "michael busch",
     "ryan pepiot", "josh lowe", "randy arozarena",
     "kyle stowers", "jackson chourio", "sal frelick",
-    "joey wiemer", "jackson holliday", "adley rutschman",
-    "gunnar henderson", "jordan westburg", "coby mayo",
+    "joey wiemer", "adley rutschman", "jordan westburg",
     "chayce mcdermott", "grayson rodriguez", "dean kremer"
 }
 
@@ -222,52 +222,25 @@ def looks_like_player_name(text):
 # FANTASY RELEVANCE FILTER
 # ============================================================
 def is_fantasy_relevant(player_name, text):
-    """
-    Returns True if player is worth alerting on.
-    Filters out low-value bench pieces with no prospect pedigree
-    and no saves/role upside.
-    """
     norm = normalize_name(player_name)
-
-    # Always relevant: top prospects
     if norm in TOP_PROSPECTS:
         return True
-
-    # Always relevant: any closer/saves situation
     if any(w in text for w in CLOSER_KEYWORDS):
         return True
-
-    # Always relevant: callups with clear everyday role mentioned
     everyday_words = ['everyday', 'regular', 'starting', 'lineup',
                       'full-time', 'every day', 'leadoff', 'cleanup']
     if any(w in text for w in everyday_words):
         return True
-
-    # Always relevant: IL returns for players who were previously rostered
-    # (can't check ownership here but IL returns are generally high value)
     if any(w in text for w in ['activated', 'reinstated', 'returns from il',
                                 'comes off il', 'off the il']):
         return True
-
-    # Flag as potentially low value — generic bench/utility move
-    # Check for signals that suggest this is a low-value transaction
-    low_value_signals = [
-        'utility', 'bench', 'depth', 'minor league',
-        'non-roster', 'september', 'roster move'
-    ]
-    high_value_signals = [
-        'prospect', 'top', 'ranked', 'debut', 'first',
-        'role', 'opportunity', 'start', 'closer', 'save'
-    ]
-
+    low_value_signals  = ['utility', 'bench', 'depth', 'non-roster', 'september']
+    high_value_signals = ['prospect', 'top', 'ranked', 'debut', 'first',
+                          'role', 'opportunity', 'start', 'closer', 'save']
     low_count  = sum(1 for w in low_value_signals if w in text)
     high_count = sum(1 for w in high_value_signals if w in text)
-
-    # If more low value signals than high value signals, skip
     if low_count > high_count and low_count >= 2:
         return False
-
-    # Default: treat as relevant
     return True
 
 # ============================================================
@@ -338,6 +311,38 @@ def save_sitting_alerts(alerted):
             json.dump(data, f)
     except Exception as e:
         print(f"  Could not save sitting alerts: {e}")
+
+def load_seen_alerts():
+    """
+    Load recently sent breaking news alerts to prevent duplicates.
+    Stores player name + alert type + timestamp.
+    Expires entries older than 4 hours.
+    """
+    try:
+        if not Path(SEEN_ALERTS_FILE).exists():
+            return {}
+        with open(SEEN_ALERTS_FILE, 'r') as f:
+            data = json.load(f)
+        # Purge entries older than 4 hours
+        cutoff = datetime.now(timezone.utc).timestamp() - (4 * 3600)
+        return {k: v for k, v in data.items() if v > cutoff}
+    except Exception:
+        return {}
+
+def save_seen_alerts(seen):
+    try:
+        with open(SEEN_ALERTS_FILE, 'w') as f:
+            json.dump(seen, f)
+    except Exception as e:
+        print(f"  Could not save seen alerts: {e}")
+
+def mark_alert_seen(player_name, alert_type, seen_dict):
+    key = f"{normalize_name(player_name)}:{alert_type}"
+    seen_dict[key] = datetime.now(timezone.utc).timestamp()
+
+def is_alert_seen(player_name, alert_type, seen_dict):
+    key = f"{normalize_name(player_name)}:{alert_type}"
+    return key in seen_dict
 
 # ============================================================
 # YAHOO
@@ -478,8 +483,17 @@ def get_todays_schedule():
         print(f"  Schedule API error: {e}")
         return []
 
+def get_games_in_progress(games):
+    """Returns set of team names whose games are currently in progress or finished."""
+    active = set()
+    for game in games:
+        if game['status'] in ['In Progress', 'Final', 'Game Over',
+                               'Manager challenge', 'Delay', 'Rain Delay']:
+            active.add(game['home_team'])
+            active.add(game['away_team'])
+    return active
+
 def game_starts_soon(game, hours=3):
-    """Returns True if game starts within the next X hours."""
     try:
         game_time = game.get('game_time_utc', '')
         if not game_time:
@@ -572,11 +586,15 @@ def get_pitcher_stats_blended(player_id):
                 for split in sg.get('splits', []):
                     s = split.get('stat', {})
                     try:
+                        ip = float(s.get('inningsPitched', '0') or '0')
+                        gs = int(s.get('gamesStarted', 0) or 0)
                         return {
                             'era':  float(s.get('era',  '99.99') or '99.99'),
                             'whip': float(s.get('whip', '9.99')  or '9.99'),
                             'k':    int(s.get('strikeOuts', 0)    or 0),
-                            'ip':   float(s.get('inningsPitched', '0') or '0'),
+                            'ip':   ip,
+                            'gs':   gs,
+                            'ip_per_start': round(ip / gs, 1) if gs > 0 else 0,
                             'kbb':  float(s.get('strikeoutWalkRatio', '0') or '0'),
                         }
                     except Exception:
@@ -595,24 +613,49 @@ def get_pitcher_stats_blended(player_id):
         prior['blend_note'] = 'no current stats yet'
         return prior
     if curr is None and prior is None:
-        return {'era': 99.99, 'whip': 9.99, 'k': 0, 'ip': 0.0, 'kbb': 0.0}
+        return {'era': 99.99, 'whip': 9.99, 'k': 0, 'ip': 0.0,
+                'gs': 0, 'ip_per_start': 0, 'kbb': 0.0}
+
+    # Use prior year ip_per_start as more reliable sample
+    ip_per_start = prior.get('ip_per_start', 0) or curr.get('ip_per_start', 0)
 
     return {
-        'era':        round(prior['era']  * w_prior + curr['era']  * w_curr, 2),
-        'whip':       round(prior['whip'] * w_prior + curr['whip'] * w_curr, 2),
-        'kbb':        round(prior['kbb']  * w_prior + curr['kbb']  * w_curr, 2),
-        'k':          curr['k'],
-        'ip':         curr['ip'],
-        'blend_note': f"{int(w_prior*100)}% prior / {int(w_curr*100)}% current"
+        'era':          round(prior['era']  * w_prior + curr['era']  * w_curr, 2),
+        'whip':         round(prior['whip'] * w_prior + curr['whip'] * w_curr, 2),
+        'kbb':          round(prior['kbb']  * w_prior + curr['kbb']  * w_curr, 2),
+        'k':            curr['k'],
+        'ip':           curr['ip'],
+        'gs':           curr.get('gs', 0),
+        'ip_per_start': ip_per_start,
+        'blend_note':   f"{int(w_prior*100)}% prior / {int(w_curr*100)}% current"
     }
 
+def is_opener(stats):
+    """
+    Returns True if pitcher is likely being used as an opener.
+    Openers average fewer than 3.0 innings per start.
+    """
+    ip_per_start = stats.get('ip_per_start', 0)
+    gs           = stats.get('gs', 0)
+    ip           = stats.get('ip', 0)
+
+    # Need at least 2 starts to make this determination
+    if gs < 2:
+        # Fall back to current season IP/GS if available
+        if gs > 0 and ip > 0:
+            return (ip / gs) < 3.0
+        return False
+
+    return ip_per_start < 3.0
+
 def passes_spot_start_gate(stats, opp_ops):
+    if stats.get('ip', 0) < 5:
+        return False
+    if is_opener(stats):
+        return False
     era  = stats.get('era',  99)
     whip = stats.get('whip',  9)
     kbb  = stats.get('kbb',   0)
-    ip   = stats.get('ip',    0)
-    if ip < 5:
-        return False
     if opp_ops <= 0.690:
         return era < 4.50 and whip < 1.35 and kbb > 1.8
     elif opp_ops <= 0.730:
@@ -621,6 +664,8 @@ def passes_spot_start_gate(stats, opp_ops):
         return era < 3.50 and whip < 1.15 and kbb > 2.8
 
 def passes_quality_gate(stats, strict=True):
+    if is_opener(stats):
+        return False
     if strict:
         return (
             stats.get('ip', 0)   >= 10
@@ -638,6 +683,8 @@ def passes_quality_gate(stats, strict=True):
 
 def score_pitcher(stats):
     if stats.get('ip', 0) < 5:
+        return -999
+    if is_opener(stats):
         return -999
     return (
         stats.get('k',   0) * 0.5
@@ -707,7 +754,6 @@ def get_actionability(item, taken):
     if player_normalized in taken:
         return False, '', 0, None, {}
 
-    # Fantasy relevance filter
     if not is_fantasy_relevant(player, text):
         print(f"  Skipping {player} — not fantasy relevant")
         return False, '', 0, None, {}
@@ -809,11 +855,12 @@ def build_alert_message(alert_type, player, summary, source, extra):
     return f"{summary}\n\n✅ AVAILABLE — act now!\n\nSource: {source}"
 
 # ============================================================
-# ALERT: SPOT START (Tue-Sat 9am)
+# ALERT: SPOT START (Tue-Sat 9am) — starts TOMORROW minimum
 # ============================================================
-def send_spot_start_alert(taken, my_roster):
+def send_spot_start_alert(taken, my_roster, games_in_progress=None):
     print("Running spot start alert...")
     today     = datetime.now(ET_TZ).date()
+    # Start from tomorrow minimum — today's starters may already be locked
     look_from = today + timedelta(days=1)
     look_to   = today + timedelta(days=3)
 
@@ -826,6 +873,12 @@ def send_spot_start_alert(taken, my_roster):
             continue
         stats = get_pitcher_stats_blended(info['id'])
         info['stats'] = stats
+
+        # Skip openers
+        if is_opener(stats):
+            print(f"  {name} skipped — likely opener ({stats.get('ip_per_start', 0)} IP/start)")
+            continue
+
         opp_ops_list = info.get('opp_ops', [0.720])
         passes = any(passes_spot_start_gate(stats, ops) for ops in opp_ops_list)
         if not passes:
@@ -901,6 +954,9 @@ def send_two_start_alert(taken, my_roster, preliminary=False):
             continue
         stats = get_pitcher_stats_blended(info['id'])
         info['stats'] = stats
+        if is_opener(stats):
+            print(f"  {name} skipped — likely opener")
+            continue
         if not passes_quality_gate(stats, strict=True):
             continue
         if min(info.get('opp_ops', [0.720, 0.720])) > 0.750:
@@ -953,20 +1009,52 @@ def send_two_start_alert(taken, my_roster, preliminary=False):
 
 # ============================================================
 # ALERT: STREAMING PITCHERS
+# FIX: Exclude pitchers whose game is already in progress
+# FIX: Exclude openers
 # ============================================================
-def send_streaming_alert(taken, my_roster):
+def send_streaming_alert(taken, my_roster, games=None):
     print("Running streaming pitcher alert...")
     today        = datetime.now(ET_TZ).date()
     end_of_week  = today + timedelta(days=(6 - today.weekday()))
     team_ops     = get_team_batting_stats()
     all_starters = get_probable_pitchers_with_matchups(today, end_of_week, team_ops)
 
+    # Build set of teams whose games are already in progress today
+    active_teams = get_games_in_progress(games) if games else set()
+
     available = {}
     for name, info in all_starters.items():
         if normalize_name(name) in taken:
             continue
+
+        # Skip if this pitcher's team game is already in progress
+        # We need to find which team this pitcher is on
+        # Use the opponents list to infer — check all teams in today's games
+        pitcher_team_active = False
+        if games and info.get('dates') and info['dates'][0] == today.isoformat():
+            for game in games:
+                if (game['home_probable'] and
+                        normalize_name(game['home_probable']) == normalize_name(name)):
+                    if game['home_team'] in active_teams:
+                        pitcher_team_active = True
+                        break
+                if (game['away_probable'] and
+                        normalize_name(game['away_probable']) == normalize_name(name)):
+                    if game['away_team'] in active_teams:
+                        pitcher_team_active = True
+                        break
+
+        if pitcher_team_active:
+            print(f"  {name} skipped — game already in progress")
+            continue
+
         s = get_pitcher_stats_blended(info['id'])
         info['stats'] = s
+
+        if is_opener(s):
+            print(f"  {name} skipped — likely opener")
+            continue
+
         if not passes_quality_gate(s, strict=False):
             continue
         if min(info.get('opp_ops', [0.720])) > 0.750:
@@ -1164,7 +1252,6 @@ def check_lineups_and_weather(my_roster, games):
                     newly_alerted[player_key] = 'postponed'
                 continue
 
-            # Only check lineup if game starts within 3 hours
             if not game_starts_soon(game, hours=3):
                 print(f"  Skipping lineup check for {hitter['name']} — game not soon")
                 continue
@@ -1276,9 +1363,16 @@ def process_news_alerts(news, taken, is_digest=False):
     alerted_players = set()
     alerted_ss      = set()
 
+    # Load seen alerts cache to prevent duplicates
+    seen_alerts = load_seen_alerts()
+
     for item in news:
         ss_hit, ss_name, is_mine = is_ss_injury_news(item)
         if ss_hit and normalize_name(ss_name) not in alerted_ss:
+            # Check seen cache
+            if is_alert_seen(ss_name, 'SS_INJURY', seen_alerts):
+                print(f"  Skipping {ss_name} SS injury — already alerted recently")
+                continue
             alerted_ss.add(normalize_name(ss_name))
             if not is_digest:
                 send_pushover(
@@ -1287,6 +1381,7 @@ def process_news_alerts(news, taken, is_digest=False):
                     f"{item['summary'][:250]}\n\nSource: {item['source']}",
                     priority=1 if is_mine else 0
                 )
+                mark_alert_seen(ss_name, 'SS_INJURY', seen_alerts)
             else:
                 actionable.append({
                     'alert_type': f"{'🚨' if is_mine else '👀'} SS INJURY",
@@ -1306,8 +1401,13 @@ def process_news_alerts(news, taken, is_digest=False):
         player_norm = normalize_name(player or '')
         if player_norm in alerted_players:
             continue
-        alerted_players.add(player_norm)
 
+        # Check seen alerts cache
+        if is_alert_seen(player, alert_type, seen_alerts):
+            print(f"  Skipping {player} {alert_type} — already alerted recently")
+            continue
+
+        alerted_players.add(player_norm)
         actionable.append({
             'alert_type': alert_type,
             'priority':   priority,
@@ -1318,6 +1418,7 @@ def process_news_alerts(news, taken, is_digest=False):
         })
 
     if not actionable:
+        save_seen_alerts(seen_alerts)
         return 0
 
     if is_digest:
@@ -1329,7 +1430,6 @@ def process_news_alerts(news, taken, is_digest=False):
             lines.append(f"{a['alert_type']}: {a['player']}\n{a['summary'][:150]}\n")
         max_priority = max(a['priority'] for a in actionable)
         send_pushover("🌅 OVERNIGHT DIGEST", '\n'.join(lines), priority=max_priority)
-        return 1
     else:
         for a in actionable:
             msg = build_alert_message(
@@ -1340,7 +1440,10 @@ def process_news_alerts(news, taken, is_digest=False):
                 f"{a['alert_type']}: {a['player']} [{a['source']}]",
                 msg, a['priority']
             )
-        return len(actionable)
+            mark_alert_seen(a['player'], a['alert_type'], seen_alerts)
+
+    save_seen_alerts(seen_alerts)
+    return len(actionable)
 
 # ============================================================
 # MAIN
@@ -1365,19 +1468,27 @@ def main():
 
     overnight_digest_window  = (hour_et == 6  and 30 <= minute_et < 45)
     morning_probables_window = (hour_et == 8  and minute_et < 15)
-    two_start_saturday       = (weekday == 5  and hour_et == 8  and minute_et < 15)
-    two_start_friday_pm      = (weekday == 4  and hour_et == 20 and minute_et < 15)
+
+    # FIX: Friday 8pm fires ONLY preliminary 2-start, NOT streaming
+    # Streaming on Friday fires at 8am only
+    two_start_friday_pm = (weekday == 4 and hour_et == 20 and minute_et < 15)
+    two_start_saturday  = (weekday == 5 and hour_et == 8  and minute_et < 15)
 
     spot_start_window = (
         hour_et == 9 and minute_et < 15
         and weekday in [1, 2, 3, 4, 5]
     )
 
+    # Streaming: Wed 8am, Thu 8am+8pm, Fri 8am ONLY (not 8pm), Sat 8am, Sun 8am
     streaming_window = (
         hour_et in [8, 20] and minute_et < 15
-        and (weekday in [2, 3, 4, 5] or (weekday == 6 and hour_et == 8))
-        and not (weekday == 2 and hour_et == 20)
-        and not (weekday == 5 and hour_et == 20)
+        and (
+            (weekday == 2 and hour_et == 8)   or  # Wed 8am only
+            (weekday == 3)                    or  # Thu 8am + 8pm
+            (weekday == 4 and hour_et == 8)   or  # Fri 8am only — NOT 8pm
+            (weekday == 5 and hour_et == 8)   or  # Sat 8am only
+            (weekday == 6 and hour_et == 8)       # Sun 8am only
+        )
     )
 
     digest_window = (
@@ -1436,14 +1547,16 @@ def main():
         if taken is None:
             taken, my_roster = get_all_rosters()
         if taken is not None:
-            send_spot_start_alert(taken, my_roster)
+            send_spot_start_alert(taken, my_roster, games)
 
     if streaming_window:
         print("\n--- STREAMING PITCHER ALERT ---")
         if taken is None:
             taken, my_roster = get_all_rosters()
+        if games is None:
+            games = get_todays_schedule()
         if taken is not None:
-            send_streaming_alert(taken, my_roster)
+            send_streaming_alert(taken, my_roster, games)
 
     if digest_window:
         print("\n--- WIRE DIGEST ---")
