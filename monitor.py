@@ -42,6 +42,21 @@ MY_SS            = ["gunnar henderson", "trea turner"]
 STRONG_POSITIONS = {'SS', '1B', 'OF'}
 COLON_FORMAT_SOURCES = {'Rotowire', 'MLB Trade Rumors'}
 
+# Sources that publish transaction news in reliable formats
+TRANSACTION_SOURCES = {'Rotowire', 'MLB Trade Rumors'}
+
+# Sources that mix feature articles with news — require transaction verb
+FEATURE_RISK_SOURCES = {'ESPN MLB', 'MLB.com Official', 'MiLB Official',
+                         'r/fantasybaseball', 'r/baseball'}
+
+# Explicit transaction verbs — required for non-Rotowire sources
+TRANSACTION_VERBS = [
+    'placed on', 'activated', 'reinstated', 'recalled', 'promoted',
+    'called up', 'designated for assignment', 'dfa', 'outrighted',
+    'traded', 'acquired', 'signed', 'released', 'optioned', 'demoted',
+    'suspended', 'transferred', 'selected', 'claimed', 'purchased'
+]
+
 NON_PLAYER_PREFIXES = {
     'mlb', 'nfl', 'nba', 'nhl', 'report', 'breaking', 'update',
     'fantasy', 'rotowire', 'espn', 'video', 'watch', 'photos',
@@ -84,7 +99,7 @@ CLOSER_KEYWORDS = [
 ]
 
 ACTION_KEYWORDS = [
-    'called up', 'promoted', 'recalled', 'call-up', 'debut',
+    'called up', 'promoted', 'recalled', 'call-up',
     'closer', 'closing role', 'save opportunity', 'ninth inning',
     'activated', 'reinstated', 'returns from il', 'comes off il',
     'placed on il', 'injured list', 'day-to-day', 'goes on il',
@@ -94,10 +109,17 @@ ACTION_KEYWORDS = [
     'optioned', 'demoted', 'scratched', 'suspended'
 ]
 
-# Non-events — IL returns from these lists are never fantasy relevant
+# Non-events — returns from these lists are never actionable
 NON_EVENT_LIST_KEYWORDS = [
     'paternity', 'bereavement', 'family medical',
     'paternity list', 'bereavement list'
+]
+
+# "Debut" is only actionable when forward-looking, not in recaps
+DEBUT_FORWARD_SIGNALS = [
+    'set to debut', 'will debut', 'expected to debut',
+    'scheduled to debut', 'could debut', 'may debut',
+    'first career', 'first major league', 'first mlb'
 ]
 
 TOP_PROSPECTS = {
@@ -124,13 +146,13 @@ TOP_PROSPECTS = {
     "jacob berry", "cam smith", "theo hardy",
     "aidan miller", "jurrangelo cijntje", "nolan schanuel",
     "enmanuel valdez", "ben brown", "hayden wesneski",
-    "jose cuas", "jasson dominguez", "everson pereira",
-    "oswald peraza", "peyton burdick", "jake burger",
-    "landon knack", "james outman", "michael busch",
-    "ryan pepiot", "josh lowe", "randy arozarena",
-    "kyle stowers", "jackson chourio", "sal frelick",
-    "joey wiemer", "adley rutschman", "jordan westburg",
-    "chayce mcdermott", "grayson rodriguez", "dean kremer"
+    "jose cuas", "everson pereira", "oswald peraza",
+    "peyton burdick", "jake burger", "landon knack",
+    "james outman", "michael busch", "ryan pepiot",
+    "josh lowe", "randy arozarena", "kyle stowers",
+    "jackson chourio", "sal frelick", "joey wiemer",
+    "adley rutschman", "jordan westburg", "chayce mcdermott",
+    "grayson rodriguez", "dean kremer", "coleman crow"
 }
 
 # ============================================================
@@ -223,26 +245,55 @@ def looks_like_player_name(text):
     return True
 
 # ============================================================
+# TRANSACTION ARTICLE FILTER
+# Non-Rotowire sources must contain an explicit transaction verb
+# to be considered actionable. This eliminates feature articles,
+# recaps, and opinion pieces that contain fantasy keywords
+# but describe no actual roster move.
+# ============================================================
+def is_transaction_article(item):
+    """
+    Returns True if this article describes an actual roster transaction.
+    For trusted sources (Rotowire, MLB Trade Rumors) — always True.
+    For all other sources — requires an explicit transaction verb.
+    """
+    source = item.get('source', '')
+    if source in TRANSACTION_SOURCES:
+        return True
+
+    text = (item['title'] + ' ' + item['summary']).lower()
+
+    # Must contain at least one explicit transaction verb
+    if not any(verb in text for verb in TRANSACTION_VERBS):
+        print(f"  Skipping [{source}] — no transaction verb found")
+        return False
+
+    # Must NOT be a past-tense recap of something that already happened
+    # "debut" is only actionable when forward-looking
+    if 'debut' in text:
+        if not any(signal in text for signal in DEBUT_FORWARD_SIGNALS):
+            # "debut" appears but no forward signal — it's a recap
+            print(f"  Skipping [{source}] — debut in recap context")
+            return False
+
+    return True
+
+# ============================================================
 # FANTASY RELEVANCE FILTER
 # All alert types pass through this — no exceptions
 # ============================================================
 def is_fantasy_relevant(player_name, text):
-    """
-    Returns True only if this player/situation is worth
-    alerting on for a 12-team H2H league.
-    Every single alert type goes through this filter.
-    """
     norm = normalize_name(player_name)
 
-    # Always relevant: top prospects regardless of ownership
+    # Always relevant: top prospects
     if norm in TOP_PROSPECTS:
         return True
 
-    # Always relevant: any closer/saves situation
+    # Always relevant: closer/saves situation
     if any(w in text for w in CLOSER_KEYWORDS):
         return True
 
-    # Always relevant: explicit everyday/starting role mentioned
+    # Always relevant: explicit everyday/starting role
     everyday_words = [
         'everyday', 'regular', 'starting', 'full-time',
         'every day', 'leadoff', 'cleanup', 'lineup'
@@ -250,20 +301,19 @@ def is_fantasy_relevant(player_name, text):
     if any(w in text for w in everyday_words):
         return True
 
-    # Suppress: paternity/bereavement returns are never actionable
+    # Suppress: paternity/bereavement returns
     if any(w in text for w in NON_EVENT_LIST_KEYWORDS):
         return False
 
-    # Suppress: explicit low-value signals outweigh high-value signals
-    low_value  = ['utility', 'bench', 'depth', 'non-roster', 'september', 'spot start']
-    high_value = ['prospect', 'top', 'ranked', 'debut', 'first call',
+    # Suppress: explicit low-value signals
+    low_value  = ['utility', 'bench', 'depth', 'non-roster', 'september']
+    high_value = ['prospect', 'top', 'ranked', 'first call',
                   'role', 'opportunity', 'closer', 'save', 'replace']
     low_count  = sum(1 for w in low_value  if w in text)
     high_count = sum(1 for w in high_value if w in text)
     if low_count > high_count and low_count >= 2:
         return False
 
-    # Default: treat as relevant
     return True
 
 # ============================================================
@@ -708,7 +758,6 @@ def matchup_label(opp_ops):
 
 # ============================================================
 # ACTIONABILITY FILTER
-# Every alert type passes through is_fantasy_relevant — no exceptions
 # ============================================================
 def extract_player_name(item):
     source  = item.get('source', '')
@@ -752,6 +801,10 @@ def get_actionability(item, taken):
     if item['type'] == 'reddit':
         return False, '', 0, None, {}
 
+    # CRITICAL: Non-Rotowire sources must be transaction articles
+    if not is_transaction_article(item):
+        return False, '', 0, None, {}
+
     text   = (item['title'] + ' ' + item['summary']).lower()
     player = extract_player_name(item)
 
@@ -762,7 +815,7 @@ def get_actionability(item, taken):
     if player_normalized in taken:
         return False, '', 0, None, {}
 
-    # ALL alert types pass through fantasy relevance filter — no exceptions
+    # All alert types pass through fantasy relevance — no exceptions
     if not is_fantasy_relevant(player, text):
         print(f"  Skipping {player} — not fantasy relevant")
         return False, '', 0, None, {}
@@ -773,27 +826,23 @@ def get_actionability(item, taken):
     extra = {}
 
     # ── CALLUP ────────────────────────────────────────────────
-    if any(w in text for w in ['called up', 'promoted', 'recalled',
-                                'debut', 'call-up']):
+    if any(w in text for w in ['called up', 'promoted', 'recalled', 'call-up']):
         return True, '🚀 CALLUP', 1, player, extra
 
     # ── CLOSER ROLE ───────────────────────────────────────────
     if any(w in text for w in CLOSER_KEYWORDS):
         return True, '💾 CLOSER ROLE', 1, player, extra
 
-    # ── IL RETURN — now filtered, no longer always fires ──────
+    # ── IL RETURN — requires role signal, no paternity/bereavement
     if any(w in text for w in ['activated', 'reinstated', 'returns from il',
                                 'comes off il', 'off the il', 'cleared to return']):
-        # Paternity/bereavement already suppressed by is_fantasy_relevant
-        # Require additional role/opportunity signal for IL returns
         role_signals = [
             'everyday', 'regular', 'starting', 'lineup', 'closer',
-            'cleanup', 'leadoff', 'ace', 'rotation', 'bullpen role',
-            'saves', 'full-time', 'impact', 'key', 'star', 'elite'
+            'cleanup', 'leadoff', 'ace', 'rotation', 'saves',
+            'full-time', 'impact', 'key', 'star', 'elite'
         ]
         if any(w in text for w in role_signals):
             return True, '✅ IL RETURN', 1, player, extra
-        # No role signal — not actionable enough
         print(f"  Skipping {player} IL return — no role signal")
         return False, '', 0, None, {}
 
@@ -901,7 +950,6 @@ def send_spot_start_alert(taken, my_roster, games=None):
         stats = get_pitcher_stats_blended(info['id'])
         info['stats'] = stats
         if is_opener(stats):
-            print(f"  {name} skipped — likely opener")
             continue
         opp_ops_list = info.get('opp_ops', [0.720])
         if not any(passes_spot_start_gate(stats, ops) for ops in opp_ops_list):
@@ -1048,7 +1096,6 @@ def send_streaming_alert(taken, my_roster, games=None):
         if normalize_name(name) in taken:
             continue
 
-        # Skip if game already in progress today
         pitcher_team_active = False
         if games and info.get('dates') and info['dates'][0] == today.isoformat():
             for game in games:
@@ -1069,7 +1116,6 @@ def send_streaming_alert(taken, my_roster, games=None):
         s = get_pitcher_stats_blended(info['id'])
         info['stats'] = s
         if is_opener(s):
-            print(f"  {name} skipped — likely opener")
             continue
         if not passes_quality_gate(s, strict=False):
             continue
@@ -1394,7 +1440,6 @@ def process_news_alerts(news, taken, is_digest=False):
     seen_alerts     = load_seen_alerts()
 
     for item in news:
-        # SS injury — real-time check
         ss_hit, ss_name, is_mine = is_ss_injury_news(item)
         if ss_hit and normalize_name(ss_name) not in alerted_ss:
             if is_alert_seen(ss_name, 'SS_INJURY', seen_alerts):
@@ -1508,15 +1553,14 @@ def main():
         and weekday in [1, 2, 3, 4, 5]
     )
 
-    # Fri 8pm fires 2-start preliminary only — NOT streaming
     streaming_window = (
         hour_et in [8, 20] and minute_et < 15
         and (
-            (weekday == 2 and hour_et == 8)  or  # Wed 8am
-            (weekday == 3)                   or  # Thu 8am + 8pm
-            (weekday == 4 and hour_et == 8)  or  # Fri 8am only
-            (weekday == 5 and hour_et == 8)  or  # Sat 8am
-            (weekday == 6 and hour_et == 8)      # Sun 8am
+            (weekday == 2 and hour_et == 8)  or
+            (weekday == 3)                   or
+            (weekday == 4 and hour_et == 8)  or
+            (weekday == 5 and hour_et == 8)  or
+            (weekday == 6 and hour_et == 8)
         )
     )
 
