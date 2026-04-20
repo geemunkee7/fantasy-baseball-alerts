@@ -580,85 +580,88 @@ def check_category_relevance(text, matchup_data):
     return False, 'no categories in play'
 
 def get_matchup_data(my_roster, team_ops):
-    """
-    Fetch current week matchup data from Yahoo.
-    Returns dict with my stats, opponent stats, remaining starts both sides.
-    Cached for 30 minutes to avoid hammering Yahoo API.
-    """
     try:
-        # Check cache
         cache_file = Path(MATCHUP_CACHE_FILE)
         if cache_file.exists():
             with open(cache_file, 'r') as f:
                 cached = json.load(f)
             age = datetime.now(timezone.utc).timestamp() - cached.get('ts', 0)
-            if age < 1800:  # 30 min cache
+            if age < 1800:
                 print("  Using cached matchup data")
                 return cached.get('data')
 
         query = get_yahoo_query()
         week  = get_current_week()
 
-        # Fetch my team's matchup this week
-        matchup = query.get_team_matchup_by_week(MY_TEAM_ID, week)
-        if not matchup:
-            return None
-
-        # Extract stats for both teams
         my_stats  = {}
         opp_stats = {}
-
-        # Get opponent team ID
         opp_team_id = None
+
         try:
-            teams = matchup.teams if hasattr(matchup, 'teams') else []
-            for team in teams:
-                tid = int(getattr(team, 'team_id', 0) or 0)
-                if tid != MY_TEAM_ID:
-                    opp_team_id = tid
-                    break
-        except Exception:
-            pass
-
-        # Fetch team stats for current week
-        try:
-            my_week_stats  = query.get_team_stats_by_week(MY_TEAM_ID, week)
-            opp_week_stats = query.get_team_stats_by_week(opp_team_id, week) \
-                             if opp_team_id else None
-
-            stat_map = {
-                'R': 'runs', 'H': 'hits', 'HR': 'home_runs',
-                'RBI': 'rbi', 'SB': 'stolen_bases', 'AVG': 'batting_avg',
-                'OPS': 'on_base_plus_slugging', 'W': 'wins',
-                'SV': 'saves', 'K': 'strikeouts', 'ERA': 'era',
-                'WHIP': 'whip', 'K/BB': 'strikeout_walk_ratio'
-            }
-
-            for cat, attr in stat_map.items():
-                try:
-                    if my_week_stats:
-                        val = getattr(my_week_stats, attr, None)
-                        if val is not None:
-                            my_stats[cat] = float(val)
-                except Exception:
-                    pass
-                try:
-                    if opp_week_stats:
-                        val = getattr(opp_week_stats, attr, None)
-                        if val is not None:
-                            opp_stats[cat] = float(val)
-                except Exception:
-                    pass
+            my_week_stats = query.get_team_stats_by_week(MY_TEAM_ID, week)
+            if my_week_stats:
+                stats_list = (my_week_stats if isinstance(my_week_stats, list)
+                              else [my_week_stats])
+                for stat in stats_list:
+                    try:
+                        stat_id  = str(getattr(stat, 'stat_id', '') or '')
+                        stat_val = float(getattr(stat, 'value', 0) or 0)
+                        stat_map = {
+                            '60': 'R',  '7': 'H',   '12': 'HR',
+                            '13': 'RBI','16': 'SB',  '3':  'AVG',
+                            '55': 'OPS','28': 'W',   '32': 'SV',
+                            '27': 'K',  '26': 'ERA', '27': 'WHIP',
+                        }
+                        cat = stat_map.get(stat_id)
+                        if cat:
+                            my_stats[cat] = stat_val
+                    except Exception:
+                        pass
         except Exception as e:
-            print(f"  Matchup stats error: {e}")
+            print(f"  My stats error: {e}")
 
-        # Get opponent's remaining probable starters this week
+        # Get opponent remaining starts
         opp_remaining_starts = 0
-        if opp_team_id:
-            try:
-                today       = datetime.now(ET_TZ).date()
-                end_of_week = today + timedelta(days=(6 - today.weekday()))
-                opp_roster  = query.get_team_roster_player_info_by_date(
+        try:
+            today       = datetime.now(ET_TZ).date()
+            end_of_week = today + timedelta(days=(6 - today.weekday()))
+            matchups    = query.get_team_matchups(MY_TEAM_ID)
+            if matchups:
+                for m in (matchups if isinstance(matchups, list) else [matchups]):
+                    try:
+                        teams = getattr(m, 'teams', []) or []
+                        for team in teams:
+                            tid = int(getattr(team, 'team_id', 0) or 0)
+                            if tid != MY_TEAM_ID:
+                                opp_team_id = tid
+                                break
+                    except Exception:
+                        pass
+                    if opp_team_id:
+                        break
+
+            if opp_team_id:
+                opp_week_stats = query.get_team_stats_by_week(opp_team_id, week)
+                if opp_week_stats:
+                    stats_list = (opp_week_stats if isinstance(opp_week_stats, list)
+                                  else [opp_week_stats])
+                    for stat in stats_list:
+                        try:
+                            stat_id  = str(getattr(stat, 'stat_id', '') or '')
+                            stat_val = float(getattr(stat, 'value', 0) or 0)
+                            stat_map = {
+                                '60': 'R',  '7': 'H',   '12': 'HR',
+                                '13': 'RBI','16': 'SB',  '3':  'AVG',
+                                '55': 'OPS','28': 'W',   '32': 'SV',
+                                '27': 'K',  '26': 'ERA', '27': 'WHIP',
+                            }
+                            cat = stat_map.get(stat_id)
+                            if cat:
+                                opp_stats[cat] = stat_val
+                        except Exception:
+                            pass
+
+                opp_roster = query.get_team_roster_player_info_by_date(
                     opp_team_id, today
                 )
                 if opp_roster:
@@ -675,8 +678,8 @@ def get_matchup_data(my_roster, team_ops):
                         1 for name in all_starters
                         if normalize_name(name) in opp_pitchers
                     )
-            except Exception as e:
-                print(f"  Opponent starts error: {e}")
+        except Exception as e:
+            print(f"  Opponent data error: {e}")
 
         data = {
             'my_stats':             my_stats,
@@ -685,7 +688,6 @@ def get_matchup_data(my_roster, team_ops):
             'week':                 week,
         }
 
-        # Cache it
         with open(MATCHUP_CACHE_FILE, 'w') as f:
             json.dump({
                 'ts':   datetime.now(timezone.utc).timestamp(),
