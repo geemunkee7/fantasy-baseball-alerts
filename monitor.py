@@ -356,36 +356,44 @@ def is_fantasy_relevant(player_name, text, taken,
                         my_roster=None, matchup_data=None):
     norm = normalize_name(player_name)
 
-    # Must not be already rostered — no exceptions, even prospects
+    # Gate 1 — must not be rostered, no exceptions including prospects
     if norm in taken:
         print(f"  {player_name} is rostered — skipping")
         return False, None
 
-    # ── GATE 2b: Long-term value signals ──────────────────────
-    # These always pass regardless of weekly situation
-    is_closer    = any(w in text for w in CLOSER_KEYWORDS)
-    is_prospect  = norm in TOP_PROSPECTS
+    # Gate 2b — closer situation always relevant
+    if any(w in text for w in CLOSER_KEYWORDS):
+        return True, 'closer'
+
+    # Gate 2b — high owned RP on IL always relevant (saves situation)
+    # even if article doesn't use closer keywords
+    if any(w in text for w in ['placed on il', 'injured list',
+                                'day-to-day', 'goes on il']):
+        # Try to find ownership from my_roster context or text signals
+        high_ownership_signals = [
+            'all-star', 'elite', 'top reliever', 'key reliever',
+            'primary', 'team\'s closer', 'saves leader'
+        ]
+        if any(s in text for s in high_ownership_signals):
+            return True, 'high_owned_rp_il'
+
+    # Gate 2b — top prospects always relevant
+    if norm in TOP_PROSPECTS:
+        return True, 'prospect'
+
+    # Gate 2b — confirmed everyday role
     everyday_words = [
         'everyday', 'regular', 'starting', 'full-time',
         'every day', 'leadoff', 'cleanup'
     ]
-    has_role     = any(w in text for w in everyday_words)
+    if any(w in text for w in everyday_words):
+        return True, 'role'
 
-    if is_closer:
-        return True, 'closer'
-    if is_prospect:
-        return True, 'prospect'
+    # Suppress — paternity/bereavement never actionable
+    if any(w in text for w in NON_EVENT_LIST_KEYWORDS):
+        return False, None
 
-    # ── LOGJAM CHECK ──────────────────────────────────────────
-    # Even if player is good, check if roster has room
-    if my_roster:
-        relevance, reason = check_roster_fit(player_name, text, my_roster)
-        if not relevance:
-            print(f"  {player_name} fails roster fit — {reason}")
-            return False, None
-
-    # ── DEPTH MOVE FILTER ─────────────────────────────────────
-    # Generic depth recalls with no role are not actionable
+    # Suppress — depth moves
     low_value  = ['utility', 'bench', 'depth', 'non-roster',
                   'september', 'corresponding move']
     high_value = ['prospect', 'top', 'ranked', 'first call',
@@ -397,14 +405,14 @@ def is_fantasy_relevant(player_name, text, taken,
         print(f"  {player_name} looks like depth move — skipping")
         return False, None
 
-    # Suppress paternity/bereavement
-    if any(w in text for w in NON_EVENT_LIST_KEYWORDS):
-        return False, None
+    # Logjam check
+    if my_roster:
+        fits, reason = check_roster_fit(player_name, text, my_roster)
+        if not fits:
+            print(f"  {player_name} fails roster fit — {reason}")
+            return False, None
 
-    if has_role:
-        return True, 'role'
-
-    # ── GATE 2a: Weekly category volatility ───────────────────
+    # Gate 2a — category volatility
     if matchup_data:
         cat_relevant, cat_reason = check_category_relevance(
             text, matchup_data
@@ -412,9 +420,8 @@ def is_fantasy_relevant(player_name, text, taken,
         if cat_relevant:
             return True, cat_reason
 
-    # Default: treat as potentially relevant if no clear suppression
     return True, 'general'
-
+                            
 def check_roster_fit(player_name, text, my_roster):
     """
     Returns (fits, reason).
@@ -897,6 +904,98 @@ def get_weak_positions(my_roster):
                 if pos not in weak:
                     weak.append(pos)
     return weak
+
+def fetch_closermonkey():
+    """
+    Fetch active closers and bullpen depth charts from Closermonkey.
+    Cached for 4 hours.
+    """
+    cache_file = Path('/tmp/closermonkey_cache.json')
+    try:
+        if cache_file.exists():
+            with open(cache_file, 'r') as f:
+                cached = json.load(f)
+            age = datetime.now(timezone.utc).timestamp() - cached.get('ts', 0)
+            if age < 14400:  # 4 hour cache
+                return cached.get('data', {})
+    except Exception:
+        pass
+
+    try:
+        response = requests.get(
+            'https://www.closermonkey.com',
+            headers={"User-Agent": "Mozilla/5.0 fantasy-baseball-monitor/1.0"},
+            timeout=10
+        )
+        text = response.text
+
+        closers      = {}
+        depth_charts = {}
+
+        # Parse closer table — look for team/closer/handedness rows
+        # Closermonkey uses a simple table format
+        rows = re.findall(
+            r'<tr[^>]*>(.*?)</tr>',
+            text, re.DOTALL | re.IGNORECASE
+        )
+        current_team = None
+        for row in rows:
+            cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
+            cells = [clean_text(c) for c in cells if clean_text(c)]
+            if not cells:
+                continue
+            # Team row
+            if len(cells) >= 2:
+                possible_name = cells[0]
+                if looks_like_player_name(possible_name):
+                    if current_team:
+                        if current_team not in depth_charts:
+                            depth_charts[current_team] = []
+                        depth_charts[current_team].append(
+                            normalize_name(possible_name)
+                        )
+                        if len(depth_charts[current_team]) == 1:
+                            closers[current_team] = normalize_name(possible_name)
+                else:
+                    # Likely a team name row
+                    for abbr, full_name in TEAM_NAME_MAP.items():
+                        if abbr in possible_name or full_name in possible_name:
+                            current_team = full_name
+                            break
+
+        data = {'closers': closers, 'depth_charts': depth_charts}
+
+        with open(cache_file, 'w') as f:
+            json.dump({
+                'ts':   datetime.now(timezone.utc).timestamp(),
+                'data': data
+            }, f)
+
+        print(f"  Closermonkey: {len(closers)} closers, "
+              f"{len(depth_charts)} depth charts")
+        return data
+
+    except Exception as e:
+        print(f"  Closermonkey fetch error: {e}")
+        return {}
+
+def is_confirmed_closer(player_name, team_name=None):
+    """Check if player is a confirmed closer per Closermonkey."""
+    data = fetch_closermonkey()
+    norm = normalize_name(player_name)
+    closers = data.get('closers', {})
+    if team_name:
+        return closers.get(team_name) == norm
+    return norm in closers.values()
+
+def get_closer_backup(team_name):
+    """Get #2 in bullpen depth chart for a team."""
+    data   = fetch_closermonkey()
+    charts = data.get('depth_charts', {})
+    depth  = charts.get(team_name, [])
+    if len(depth) >= 2:
+        return depth[1]
+    return None
 
 def track_league_transactions(taken):
     try:
@@ -1519,18 +1618,49 @@ def get_actionability(item, taken, games=None,
         print(f"  Skipping {player} IL return — no role signal")
         return False, '', 0, None, {}
 
-    # ── INJURY OPPORTUNITY ────────────────────────────────────
+  # ── INJURY OPPORTUNITY ────────────────────────────────────
     if any(w in text for w in ['placed on il', 'injured list',
                                 'day-to-day', 'goes on il', 'to the il']):
-        full_text        = clean_text(item['title'] + ' ' + item['summary'])
-        is_closer_injury = any(w in text for w in CLOSER_KEYWORDS)
+        full_text = clean_text(item['title'] + ' ' + item['summary'])
+
+        # Check Closermonkey first — most reliable closer confirmation
+        closer_data    = fetch_closermonkey()
+        all_closers    = closer_data.get('closers', {})
+        player_norm    = normalize_name(player)
+        is_closer_injury = (
+            player_norm in all_closers.values()
+            or any(w in text for w in CLOSER_KEYWORDS)
+        )
 
         if is_closer_injury:
-            replacements           = find_named_replacements(full_text, taken)
-            available_replacements = [r for r in replacements if r[1]]
-            owned_replacements     = [r for r in replacements if not r[1]]
+            # Find team name from article
+            injured_team = None
+            for team_name, closer_norm in all_closers.items():
+                if closer_norm == player_norm:
+                    injured_team = team_name
+                    break
+
+            # Get backup from depth chart
+            backup_name = get_closer_backup(injured_team) if injured_team else None
+
+            # Check if backup is available
+            available_replacements = []
+            owned_replacements     = []
+            if backup_name:
+                if backup_name not in taken:
+                    available_replacements = [(backup_name, True)]
+                else:
+                    owned_replacements = [(backup_name, False)]
+            else:
+                # Fall back to article text scanning
+                replacements           = find_named_replacements(full_text, taken)
+                available_replacements = [r for r in replacements if r[1]]
+                owned_replacements     = [r for r in replacements if not r[1]]
+
             extra['available_replacements'] = available_replacements
             extra['owned_replacements']     = owned_replacements
+            extra['injured_team']           = injured_team
+
             if available_replacements:
                 return True, '💾 SAVES OPP', 1, player, extra
             else:
@@ -1996,6 +2126,133 @@ def send_wire_digest(taken, my_roster):
     except Exception as e:
         print(f"  Wire digest error: {e}")
 
+def check_waiver_drops(taken, my_roster, team_ops):
+    """
+    Scan recent league drops and alert if a dropped player
+    is better than your worst player at that position.
+    Accounts for 2-day waiver period.
+    """
+    print("Checking waiver drops...")
+    try:
+        query        = get_yahoo_query()
+        transactions = load_transactions()
+        now_ts       = datetime.now(timezone.utc).timestamp()
+        two_days_ago = now_ts - (2 * 86400)
+
+        # Get recent drops from transaction log
+        recent_drops = [
+            t for t in transactions
+            if 'drop' in t.get('type', '').lower()
+            and t.get('timestamp', 0) > two_days_ago
+        ]
+
+        if not recent_drops:
+            print("  No recent drops found")
+            return
+
+        # Get my weakest hitter for comparison
+        my_hitters = [
+            p for p in my_roster
+            if p['position'] not in ['SP', 'RP', 'P']
+            and not p['is_undroppable']
+            and 'IL' not in (p['status'] or '')
+        ]
+        if not my_hitters:
+            return
+
+        t         = get_season_thresholds()
+        my_hitters.sort(key=lambda x: x['pct_owned'])
+        weakest   = my_hitters[0]
+
+        # Get my weakest pitcher for comparison
+        my_pitchers = [
+            p for p in my_roster
+            if p['position'] in ['SP', 'RP', 'P']
+            and not p['is_undroppable']
+            and 'IL' not in (p['status'] or '')
+        ]
+        my_pitchers.sort(key=lambda x: x['pct_owned'])
+        weakest_pitcher = my_pitchers[0] if my_pitchers else None
+
+        alerts = []
+        for drop in recent_drops:
+            for player_info in drop.get('players', []):
+                name     = player_info.get('name', '')
+                norm     = normalize_name(name)
+
+                # Skip if re-rostered already
+                if norm in taken:
+                    continue
+
+                # Look up ownership via Yahoo
+                try:
+                    search_results = query.get_league_players(
+                        player_count=5,
+                        player_filter_type='A'  # Available players
+                    )
+                    matched = None
+                    for p in (search_results or []):
+                        if normalize_name(p.name.full) == norm:
+                            matched = p
+                            break
+
+                    if not matched:
+                        continue
+
+                    pct_owned = float(
+                        getattr(matched.percent_owned, 'value', 0) or 0
+                    )
+                    position  = str(getattr(matched, 'primary_position', '') or '')
+
+                    # Calculate waiver available date
+                    drop_ts       = drop.get('timestamp', now_ts)
+                    available_dt  = datetime.fromtimestamp(
+                        drop_ts + (2 * 86400), tz=ET_TZ
+                    )
+                    available_str = available_dt.strftime('%a %-m/%-d %-I:%M%p ET')
+
+                    # Compare against weakest player at position
+                    if position in ['SP', 'RP', 'P'] and weakest_pitcher:
+                        if pct_owned > weakest_pitcher['pct_owned'] + 15:
+                            alerts.append({
+                                'name':      name,
+                                'position':  position,
+                                'pct_owned': pct_owned,
+                                'available': available_str,
+                                'vs':        weakest_pitcher['name'],
+                                'vs_pct':    weakest_pitcher['pct_owned']
+                            })
+                    elif position not in ['SP', 'RP', 'P']:
+                        if pct_owned > weakest['pct_owned'] + 15:
+                            alerts.append({
+                                'name':      name,
+                                'position':  position,
+                                'pct_owned': pct_owned,
+                                'available': available_str,
+                                'vs':        weakest['name'],
+                                'vs_pct':    weakest['pct_owned']
+                            })
+
+                except Exception as e:
+                    print(f"  Waiver drop lookup error for {name}: {e}")
+                    continue
+
+        if not alerts:
+            print("  No waiver upgrades found")
+            return
+
+        lines = ["🔄 WAIVER WIRE DROPS:\n"]
+        for a in alerts:
+            lines.append(
+                f"• {a['name']} ({a['position']}, {a['pct_owned']:.0f}% owned)\n"
+                f"  Available: {a['available']}\n"
+                f"  Better than: {a['vs']} ({a['vs_pct']:.0f}%)"
+            )
+        send_pushover("🔄 WAIVER DROPS", '\n'.join(lines), priority=0)
+
+    except Exception as e:
+        print(f"  Waiver drop check error: {e}")
+
 def store_morning_probables(games):
     probables = {}
     for game in games:
@@ -2058,6 +2315,13 @@ def check_lineups_and_weather(my_roster, games):
         and 'IL' not in (p['status'] or '')
         and p['selected_position'] not in ['BN', 'IL']
     ]
+    # Build bench players by position for swap check
+    bench_players = [
+        p for p in my_roster
+        if p['selected_position'] == 'BN'
+        and 'IL' not in (p['status'] or '')
+        and p['position'] not in ['SP', 'RP', 'P']
+    ]
     newly_alerted = dict(sitting_alerted)
 
     for game in games:
@@ -2075,11 +2339,20 @@ def check_lineups_and_weather(my_roster, games):
 
             if status in ['Postponed', 'Suspended']:
                 if player_key not in sitting_alerted:
+                    # Check if any bench hitter is available to swap in
+                    available_bench = [
+                        b for b in bench_players
+                        if normalize_name(b['name']) != player_key
+                    ]
+                    if not available_bench:
+                        print(f"  {hitter['name']} postponed but no bench swap available — skipping")
+                        newly_alerted[player_key] = 'postponed_no_bench'
+                        continue
                     send_pushover(
                         f"🌧️ POSTPONED: {hitter['name']}",
                         f"{away_team} @ {home_team} postponed.\n"
                         f"{hitter['name']} won't play today.\n\n"
-                        f"⚠️ Swap in a bench hitter!",
+                        f"⚠️ Swap in: {available_bench[0]['name']}",
                         priority=1
                     )
                     newly_alerted[player_key] = 'postponed'
@@ -2097,10 +2370,19 @@ def check_lineups_and_weather(my_roster, games):
                     for lp in all_lineup
                 )
                 if not in_lineup:
+                    # Check bench availability
+                    available_bench = [
+                        b for b in bench_players
+                        if normalize_name(b['name']) != player_key
+                    ]
+                    if not available_bench:
+                        print(f"  {hitter['name']} sitting but no bench swap — skipping")
+                        newly_alerted[player_key] = 'sitting_no_bench'
+                        continue
                     send_pushover(
                         f"🪑 SITTING: {hitter['name']}",
-                        f"{hitter['name']} not in today's lineup for {team_name}.\n\n"
-                        f"⚠️ Swap in a bench hitter before lock!",
+                        f"{hitter['name']} not in lineup for {team_name}.\n\n"
+                        f"⚠️ Swap in: {available_bench[0]['name']}",
                         priority=1
                     )
                     newly_alerted[player_key] = 'sitting'
@@ -2367,6 +2649,12 @@ def main():
                 track_league_transactions(taken)
             except Exception as e:
                 print(f"  Transaction tracking skipped: {e}")
+
+            try:
+                if minute_et < 15:
+                    check_waiver_drops(taken, my_roster, team_ops)
+            except Exception as e:
+                print(f"  Waiver check skipped: {e}")
 
             sent = process_news_alerts(
                 news, taken, is_digest=False,
