@@ -810,6 +810,8 @@ def save_transactions(transactions):
     except Exception as e:
         print(f"  Could not save transactions: {e}")
 
+rom yfpy.query import YahooFantasySportsQuery
+print([m for m in dir(YahooFantasySportsQuery) if 'match' in m.lower() or 'stat' in m.lower() or 'score' in m.lower()])
 # ============================================================
 # YAHOO
 # ============================================================
