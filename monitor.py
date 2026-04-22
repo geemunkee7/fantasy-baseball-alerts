@@ -30,6 +30,7 @@ SITTING_ALERTS_FILE  = '/tmp/sitting_alerts.json'
 SEEN_ALERTS_FILE     = '/tmp/seen_alerts.json'
 TRANSACTIONS_FILE    = '/tmp/league_transactions.json'
 MATCHUP_CACHE_FILE   = '/tmp/matchup_cache.json'
+CLOSERMONKEY_CACHE   = '/tmp/closermonkey_cache.json'
 
 SEASON_START = date(2026, 3, 20)
 
@@ -914,18 +915,21 @@ def get_weak_positions(my_roster):
                     weak.append(pos)
     return weak
 
+CLOSERMONKEY_CACHE = '/tmp/closermonkey_cache.json'
+
 def fetch_closermonkey():
     """
-    Fetch active closers and bullpen depth charts from Closermonkey.
-    Cached for 4 hours.
+    Fetch active closers and depth charts from Closermonkey.
+    Returns dict: {team_name: [closer, backup, ...]}
+    Cached 4 hours.
     """
-    cache_file = Path('/tmp/closermonkey_cache.json')
     try:
+        cache_file = Path(CLOSERMONKEY_CACHE)
         if cache_file.exists():
             with open(cache_file, 'r') as f:
                 cached = json.load(f)
             age = datetime.now(timezone.utc).timestamp() - cached.get('ts', 0)
-            if age < 14400:  # 4 hour cache
+            if age < 14400:
                 return cached.get('data', {})
     except Exception:
         pass
@@ -934,77 +938,86 @@ def fetch_closermonkey():
         response = requests.get(
             'https://www.closermonkey.com',
             headers={"User-Agent": "Mozilla/5.0 fantasy-baseball-monitor/1.0"},
-            timeout=10
+            timeout=15
         )
         text = response.text
 
-        closers      = {}
+        # Parse depth chart table
+        # Closermonkey lists team then closer then backups
         depth_charts = {}
-
-        # Parse closer table — look for team/closer/handedness rows
-        # Closermonkey uses a simple table format
-        rows = re.findall(
-            r'<tr[^>]*>(.*?)</tr>',
-            text, re.DOTALL | re.IGNORECASE
-        )
         current_team = None
+
+        # Extract all table rows
+        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', text, re.DOTALL | re.IGNORECASE)
         for row in rows:
-            cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
-            cells = [clean_text(c) for c in cells if clean_text(c)]
+            cells = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.DOTALL | re.IGNORECASE)
+            cells = [clean_text(c) for c in cells if clean_text(c).strip()]
             if not cells:
                 continue
-            # Team row
-            if len(cells) >= 2:
-                possible_name = cells[0]
-                if looks_like_player_name(possible_name):
-                    if current_team:
+
+            # Check if this row contains a team name
+            for abbr, full_name in TEAM_NAME_MAP.items():
+                if any(abbr in c or full_name in c for c in cells):
+                    current_team = full_name
+                    break
+
+            # Check if cells contain player names
+            if current_team:
+                for cell in cells:
+                    cell = cell.strip()
+                    if looks_like_player_name(cell):
+                        norm = normalize_name(cell)
+                        # Skip if it's a team name word
+                        if any(t.lower() in norm for t in ['angels', 'astros', 'athletics',
+                               'blue jays', 'braves', 'brewers', 'cardinals', 'cubs',
+                               'diamondbacks', 'dodgers', 'giants', 'guardians', 'mariners',
+                               'marlins', 'mets', 'nationals', 'orioles', 'padres',
+                               'phillies', 'pirates', 'rangers', 'rays', 'red sox',
+                               'reds', 'rockies', 'royals', 'tigers', 'twins',
+                               'white sox', 'yankees']):
+                            continue
                         if current_team not in depth_charts:
                             depth_charts[current_team] = []
-                        depth_charts[current_team].append(
-                            normalize_name(possible_name)
-                        )
-                        if len(depth_charts[current_team]) == 1:
-                            closers[current_team] = normalize_name(possible_name)
-                else:
-                    # Likely a team name row
-                    for abbr, full_name in TEAM_NAME_MAP.items():
-                        if abbr in possible_name or full_name in possible_name:
-                            current_team = full_name
-                            break
+                        if norm not in depth_charts[current_team]:
+                            depth_charts[current_team].append(norm)
 
-        data = {'closers': closers, 'depth_charts': depth_charts}
+        # Build flat closer lookup: normalized_name -> team
+        closer_lookup = {}
+        for team, pitchers in depth_charts.items():
+            if pitchers:
+                closer_lookup[pitchers[0]] = team
 
-        with open(cache_file, 'w') as f:
-            json.dump({
-                'ts':   datetime.now(timezone.utc).timestamp(),
-                'data': data
-            }, f)
+        data = {
+            'depth_charts':   depth_charts,
+            'closer_lookup':  closer_lookup,
+        }
 
-        print(f"  Closermonkey: {len(closers)} closers, "
-              f"{len(depth_charts)} depth charts")
+        with open(CLOSERMONKEY_CACHE, 'w') as f:
+            json.dump({'ts': datetime.now(timezone.utc).timestamp(), 'data': data}, f)
+
+        print(f"  Closermonkey: {len(closer_lookup)} closers loaded")
         return data
 
     except Exception as e:
-        print(f"  Closermonkey fetch error: {e}")
+        print(f"  Closermonkey error: {e}")
         return {}
 
-def is_confirmed_closer(player_name, team_name=None):
-    """Check if player is a confirmed closer per Closermonkey."""
+def get_closer_team(player_name):
+    """Returns team name if player is a confirmed closer, else None."""
     data = fetch_closermonkey()
     norm = normalize_name(player_name)
-    closers = data.get('closers', {})
-    if team_name:
-        return closers.get(team_name) == norm
-    return norm in closers.values()
+    return data.get('closer_lookup', {}).get(norm)
 
 def get_closer_backup(team_name):
-    """Get #2 in bullpen depth chart for a team."""
-    data   = fetch_closermonkey()
-    charts = data.get('depth_charts', {})
-    depth  = charts.get(team_name, [])
-    if len(depth) >= 2:
-        return depth[1]
-    return None
+    """Returns normalized name of #2 in bullpen depth chart, or None."""
+    data  = fetch_closermonkey()
+    chart = data.get('depth_charts', {}).get(team_name, [])
+    return chart[1] if len(chart) >= 2 else None
+
+def get_all_closers():
+    """Returns set of normalized closer names."""
+    data = fetch_closermonkey()
+    return set(data.get('closer_lookup', {}).keys())
 
 def track_league_transactions(taken):
     try:
@@ -1469,30 +1482,65 @@ def format_game_date(date_str):
 # ============================================================
 # PLAYER NAME EXTRACTION — improved
 # ============================================================
+# Words that indicate a phrase fragment, not a player name
+INVALID_NAME_WORDS = {
+    'on', 'to', 'from', 'with', 'after', 'before', 'the', 'and', 'or',
+    'in', 'at', 'by', 'for', 'of', 'injured', 'list', 'il', 'right',
+    'left', 'elbow', 'knee', 'shoulder', 'wrist', 'hamstring', 'back',
+    'thumb', 'ankle', 'concussion', 'surgery', 'fracture', 'sign',
+    'place', 'trade', 'acquire', 'release', 'option', 'demote',
+    'recall', 'promote', 'activate', 'reinstate', 'suspend',
+    'designate', 'assign', 'claim', 'select', 'transfer', 'loose',
+    'tight', 'sore', 'strained', 'sprained'
+}
+
+# Minor league team names that could be mistaken for player names
+MINOR_LEAGUE_TEAMS = {
+    'sugar land', 'salt lake', 'round rock', 'las vegas', 'el paso',
+    'oklahoma city', 'iowa cubs', 'lehigh valley', 'durham bulls',
+    'charlotte knights', 'columbus clippers', 'buffalo bisons',
+    'scranton wilkes', 'pawtucket', 'norfolk tides', 'toledo mud',
+    'louisville bats', 'gwinnett stripers', 'memphis redbirds',
+    'nashville sounds', 'new orleans', 'reno aces', 'tacoma rainiers',
+    'sacramento river', 'albuquerque isotopes'
+}
+
 def extract_player_name(item):
-    """
-    Extract player name from article.
-    For MLB Trade Rumors "Team Action Player" format,
-    scan body text for the actual player name.
-    Requires at least 2 words — single-word names rejected.
-    """
     source  = item.get('source', '')
     title   = item.get('title', '')
     summary = item.get('summary', '')
 
-    # Trusted colon-format sources
+    # For trusted colon-format sources, split on colon
     if source in COLON_FORMAT_SOURCES and ':' in title:
         candidate = title.split(':')[0].strip()
         if looks_like_player_name(candidate):
             return candidate
 
-    # For all sources, scan full text for valid 2+ word player name
-    full_text  = title + ' ' + summary
+    # For all sources, scan full text
+    full_text  = clean_text(title + ' ' + summary)
     pattern    = r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z\']+){1,3})\b'
     candidates = re.findall(pattern, full_text)
+
     for candidate in candidates:
-        if looks_like_player_name(candidate):
-            return candidate
+        if not looks_like_player_name(candidate):
+            continue
+        # Reject if any word is an invalid/action/injury word
+        words = candidate.lower().split()
+        if any(w in INVALID_NAME_WORDS for w in words):
+            continue
+        # Reject minor league team names
+        if candidate.lower() in MINOR_LEAGUE_TEAMS:
+            continue
+        # Reject if starts with action verb pattern
+        # e.g. "Sign Dylan" — first word is a verb
+        first_word = words[0]
+        if first_word in {
+            'sign', 'place', 'trade', 'acquire', 'release', 'option',
+            'demote', 'recall', 'promote', 'activate', 'reinstate',
+            'suspend', 'designate', 'assign', 'claim', 'select'
+        }:
+            continue
+        return candidate
 
     return None
 
@@ -1628,47 +1676,46 @@ def get_actionability(item, taken, games=None,
         return False, '', 0, None, {}
 
   # ── INJURY OPPORTUNITY ────────────────────────────────────
-    if any(w in text for w in ['placed on il', 'injured list',
+  if any(w in text for w in ['placed on il', 'injured list',
                                 'day-to-day', 'goes on il', 'to the il']):
         full_text = clean_text(item['title'] + ' ' + item['summary'])
 
-        # Check Closermonkey first — most reliable closer confirmation
-        closer_data    = fetch_closermonkey()
-        all_closers    = closer_data.get('closers', {})
-        player_norm    = normalize_name(player)
+        # Check Closermonkey — most reliable closer confirmation
+        # This fires regardless of whether the closer is owned
+        all_closers      = get_all_closers()
+        player_norm      = normalize_name(player)
         is_closer_injury = (
-            player_norm in all_closers.values()
+            player_norm in all_closers
             or any(w in text for w in CLOSER_KEYWORDS)
         )
 
         if is_closer_injury:
-            # Find team name from article
-            injured_team = None
-            for team_name, closer_norm in all_closers.items():
-                if closer_norm == player_norm:
-                    injured_team = team_name
-                    break
+            # Find the team this closer plays for
+            closer_team = get_closer_team(player_norm)
 
-            # Get backup from depth chart
-            backup_name = get_closer_backup(injured_team) if injured_team else None
+            # Get backup from Closermonkey depth chart
+            backup_norm = get_closer_backup(closer_team) if closer_team else None
 
-            # Check if backup is available
+            # Check availability — backup is what we care about, not the closer
             available_replacements = []
             owned_replacements     = []
-            if backup_name:
-                if backup_name not in taken:
-                    available_replacements = [(backup_name, True)]
+
+            if backup_norm:
+                # Find display name from taken context
+                backup_display = backup_norm.title()
+                if backup_norm not in taken:
+                    available_replacements = [(backup_display, True)]
                 else:
-                    owned_replacements = [(backup_name, False)]
+                    owned_replacements = [(backup_display, False)]
             else:
-                # Fall back to article text scanning
+                # Fall back to scanning article text
                 replacements           = find_named_replacements(full_text, taken)
                 available_replacements = [r for r in replacements if r[1]]
                 owned_replacements     = [r for r in replacements if not r[1]]
 
             extra['available_replacements'] = available_replacements
             extra['owned_replacements']     = owned_replacements
-            extra['injured_team']           = injured_team
+            extra['injured_team']           = closer_team
 
             if available_replacements:
                 return True, '💾 SAVES OPP', 1, player, extra
@@ -1676,6 +1723,7 @@ def get_actionability(item, taken, games=None,
                 extra['watch_mode'] = True
                 return True, '💾 SAVES WATCH', 0, player, extra
 
+        # Regular injury — only alert if role opportunity explicit
         opp_words = ['start', 'lineup', 'replac', 'fill', 'opportunit',
                      'role', 'regular', 'everyday', 'every day',
                      'platoon', 'takeover']
@@ -1685,6 +1733,11 @@ def get_actionability(item, taken, games=None,
 
     # ── DFA → CALLUP ──────────────────────────────────────────
     if any(w in text for w in ['designated for assignment', 'dfa', 'outrighted']):
+        # Must be a known prospect — not just any DFA
+        player_norm = normalize_name(player)
+        if player_norm not in TOP_PROSPECTS:
+            print(f"  Skipping DFA {player} — not a known prospect")
+            return False, '', 0, None, {}
         callup_words = ['prospect', 'called up', 'promoted', 'minor league',
                         'aaa', 'triple-a', 'recall', 'top prospect']
         if any(w in text for w in callup_words):
