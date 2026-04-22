@@ -1676,7 +1676,7 @@ def get_actionability(item, taken, games=None,
         return False, '', 0, None, {}
 
   # ── INJURY OPPORTUNITY ────────────────────────────────────
-  if any(w in text for w in ['placed on il', 'injured list',
+    if any(w in text for w in ['placed on il', 'injured list',
                                 'day-to-day', 'goes on il', 'to the il']):
         full_text = clean_text(item['title'] + ' ' + item['summary'])
 
