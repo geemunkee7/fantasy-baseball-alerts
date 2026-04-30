@@ -1152,7 +1152,7 @@ def sync_league_transactions():
                         dest_team = str(getattr(tdata, 'destination_team_key', '') or '')
                         src_team  = str(getattr(tdata, 'source_team_key', '') or '')
                         ptype     = str(getattr(tdata, 'type', '') or '').lower()
-                       pid       = str(getattr(pl, 'player_id', '') or '')
+                        pid       = str(getattr(pl, 'player_id', '') or '')
                         # Try multiple position attribute paths yfpy uses
                         pos = ''
                         try:
@@ -1464,6 +1464,16 @@ def process_breaking_news(news, taken, my_roster, team_ops):
         canonical, is_available = validate_player_in_yahoo(player, taken)
         if canonical is None:
             continue  # Player not in MLB database — suppress
+        # Suppress known media/writer names that cleared name extraction
+        if normalize_name(canonical) in {
+            'eric karabell', 'francys romero', 'jeff passan', 'ken rosenthal',
+            'jon heyman', 'bob nightengale', 'buster olney', 'tim kurkjian',
+            'mark feinsand', 'joel sherman', 'jim bowden', 'kiley mcdaniel',
+            'keith law', 'jayson stark', 'jerry crasnick', 'jim callis',
+            'bradford doolittle', 'scott pianowski', 'andy behrens',
+            'brad evans', 'dalton del don', 'derek vermilya', 'clay link',
+        }:
+            continue
 
         player_norm = normalize_name(canonical)
 
@@ -2066,7 +2076,7 @@ def send_streamers_alert(taken, my_roster, team_ops):
 
     my_pitcher_norms = _get_pitchers_including_il_returns(
         my_roster, week_mon=monday_of_week(today), week_sun=week_sun)
-    }
+    
 
     my_remaining  = []
     opp_remaining = []
