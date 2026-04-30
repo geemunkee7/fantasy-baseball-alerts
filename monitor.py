@@ -1152,7 +1152,7 @@ def sync_league_transactions():
                         dest_team = str(getattr(tdata, 'destination_team_key', '') or '')
                         src_team  = str(getattr(tdata, 'source_team_key', '') or '')
                         ptype     = str(getattr(tdata, 'type', '') or '').lower()
-                        pid       = str(getattr(pl, 'player_id', '') or '')
+                        pid       = str(getattr(pl, 'player_id', '') or '')                        
                         # Try multiple position attribute paths yfpy uses
                         pos = ''
                         try:
