@@ -1431,15 +1431,37 @@ def process_breaking_news(news, taken, my_roster, team_ops):
                 if any(kw in text for kw in INJURY_KEYWORDS):
                     if any(kw in text for kw in MINOR_INJURY_KEYWORDS):
                         break
-                    key   = f"ss_injury:{player_norm}"
+                    key     = f"ss_injury:{player_norm}"
                     if is_alert_seen(key, seen):
                         break
                     is_mine = player_norm in [normalize_name(s) for s in
                               ["Gunnar Henderson", "Trea Turner"]]
+                    # For non-mine SS: only fire if there's an available SS worth adding
+                    if not is_mine:
+                        available_ss = [
+                            p for p in get_league_free_agents(position='SS', count=10)
+                            if p['pct_owned'] >= 20
+                               or normalize_name(p['name']) in TOP_PROSPECTS
+                        ]
+                        if not available_ss:
+                            break  # No actionable SS available — suppress
                     title_str = f"{'🚨' if is_mine else '👀'} SS INJURY: {canonical}"
                     if is_mine:
                         title_str += " ← YOUR PLAYER"
-                    msg = f"{canonical} — {_extract_injury_detail(text)}\n\nSource: {source}"
+                        msg = (
+                            f"{canonical} — {_extract_injury_detail(text)}\n\n"
+                            f"⚠️ YOUR SS IS HURT. Check IL status and lineup immediately.\n\n"
+                            f"Source: {source}"
+                        )
+                    else:
+                        best = available_ss[0] if available_ss else None
+                        pickup_str = (f"\n🎯 Available SS to add: {best['name']} "
+                                      f"({best['pct_owned']:.0f}% owned)"
+                                      if best else "")
+                        msg = (
+                            f"{canonical} — {_extract_injury_detail(text)}\n"
+                            f"{pickup_str}\n\nSource: {source}"
+                        )
                     _fire_or_queue(title_str, msg, priority=1 if is_mine else 0,
                                    seen=seen, key=key, sleep_queue=sleep_queue,
                                    queue_category='ss_injury')
@@ -1522,33 +1544,43 @@ def process_breaking_news(news, taken, my_roster, team_ops):
                 )
                 alerts_sent += 1
 
-        # ── BREAKING NEWS - INJURY ──────────────────────────────
+      # ── BREAKING NEWS - INJURY ──────────────────────────────
         elif any(kw in text for kw in INJURY_KEYWORDS) and not is_confirmed_closer:
-            # Only fire if there's a clear backup opportunity worth acting on
-            has_role_opportunity = any(w in text for w in [
-                'replace', 'fill', 'opportunity', 'role', 'regular',
-                'everyday', 'every day', 'platoon', 'takeover', 'lineup'
-            ])
-            if not has_role_opportunity:
-                continue
-            if not is_available:
-                continue  # injured player is owned — can't add
-
             key = f"injury_opp:{player_norm}"
             if is_alert_seen(key, seen):
                 continue
 
-            # Validate relevance: check position fit
+            # Gate 1: Position must be relevant to my team
             if not _check_position_relevance(text, my_roster):
                 continue
 
+            # Gate 2: Must have role opportunity signal
+            has_role_opportunity = any(w in text for w in [
+                'replace', 'fill', 'opportunity', 'role', 'regular',
+                'everyday', 'every day', 'platoon', 'takeover', 'lineup',
+                'starting', 'start', 'called up', 'promoted', 'recalled',
+                'rotation spot', 'spot start', 'filling in'
+            ])
+            if not has_role_opportunity:
+                continue
+
+            # Gate 3: Find and validate a specific backup worth adding
+            backup = _find_relevant_backup(text, taken, my_roster, team_ops)
+            if backup is None:
+                continue  # No actionable backup — suppress entirely
+
             injury_detail = _extract_injury_detail(text)
             drop_cand     = find_best_drop(my_roster, team_ops)
-            drop_str      = f"\n💀 Drop: {drop_cand['name']} ({drop_cand['pct_owned']:.0f}%)" if drop_cand else ""
+            drop_str      = (f"\n💀 Drop: {drop_cand['name']} ({drop_cand['pct_owned']:.0f}%)"
+                             if drop_cand else "")
+            stat_str      = backup.get('stat_str', '')
+            reason_str    = backup.get('reason', '')
 
             msg = (
                 f"🚑 {canonical} — {injury_detail}\n\n"
-                f"Role opportunity exists. Check Yahoo for backup options.{drop_str}\n\n"
+                f"🎯 Add: {backup['name']} ({backup['pct_owned']:.0f}% owned)"
+                f"{' — ' + stat_str if stat_str else ''}\n"
+                f"{reason_str}{drop_str}\n\n"
                 f"Source: {source}"
             )
             _fire_or_queue(
@@ -1626,7 +1658,150 @@ def _extract_injury_detail(text):
     found_injury   = next((i for i in injuries   if i in text), 'injury')
     found_timeline = next((t for t in timelines  if t in text), 'timeline TBD')
     return f"{found_injury} — {found_timeline}"
+def _find_relevant_backup(text, taken, my_roster, team_ops):
+    """
+    Find a specific, fantasy-relevant backup created by an injury.
+    Returns a dict with name/pct_owned/stat_str/reason, or None if no actionable backup.
+    Checks (in order): ownership threshold, prospect status, platoon-to-everyday,
+    reliever-to-starter, callup acceleration.
+    """
+    # Determine injured player's position from text
+    pos_signals = {
+        'SP': ['pitcher', 'starter', 'right-hander', 'left-hander', 'righty', 'lefty', 'ace', 'rotation'],
+        'RP': ['reliever', 'closer', 'bullpen'],
+        'C':  ['catcher'],
+        '1B': ['first base', 'first baseman'],
+        '2B': ['second base', 'second baseman'],
+        '3B': ['third base', 'third baseman'],
+        'SS': ['shortstop'],
+        'OF': ['outfielder', 'outfield', 'center field', 'left field', 'right field'],
+    }
+    injured_pos = None
+    for pos, signals in pos_signals.items():
+        if any(s in text for s in signals):
+            injured_pos = pos
+            break
 
+    if injured_pos in MY_CLOGGED_POSITIONS:
+        return None  # Clogged position — not actionable for my team
+
+    # Fetch available players at that position
+    candidates = get_league_free_agents(position=injured_pos, count=20) if injured_pos else []
+    if not candidates:
+        candidates = get_league_free_agents(count=20)
+
+    today     = date.today()
+    week_sun  = sunday_of_week(today)
+    week_starters = {}
+    if injured_pos == 'SP':
+        week_starters = get_probable_pitchers(today, week_sun, team_ops)
+
+    for player in candidates:
+        name      = player['name']
+        norm      = normalize_name(name)
+        pct_owned = player['pct_owned']
+        pos       = player.get('position', injured_pos or '')
+
+        # Must be available in Yahoo (validated)
+        canonical_name, avail = validate_player_in_yahoo(name, taken)
+        if not avail or canonical_name is None:
+            continue
+
+        reason   = ''
+        stat_str = ''
+        passes   = False
+
+        # ── Check 1: Meaningful ownership ───────────────────────
+        if pct_owned >= 25:
+            passes = True
+            reason = f"Established fantasy asset ({pct_owned:.0f}% owned)"
+
+        # ── Check 2: Top prospect ────────────────────────────────
+        if not passes and norm in TOP_PROSPECTS:
+            passes = True
+            reason = "Top MLB prospect — injury may accelerate path to majors"
+
+        # ── Check 3: Platoon → everyday signal ──────────────────
+        if not passes and any(w in text for w in [
+            'everyday', 'every day', 'full-time', 'regular', 'starting role',
+            'starts every', 'penciled in', 'lineup daily'
+        ]):
+            pid = get_player_id_from_name(name)
+            if pid:
+                stats = get_hitter_stats(pid)
+                if stats and stats.get('pa', 0) >= 30 and stats.get('ops', 0) >= 0.700:
+                    passes   = True
+                    reason   = "Platoon role becoming everyday opportunity"
+                    stat_str = f"OPS {stats['ops']:.3f} | {stats['pa']} PA"
+
+        # ── Check 4: Reliever → spot starter ────────────────────
+        if not passes and pos == 'RP' and injured_pos == 'SP':
+            pid = get_player_id_from_name(name)
+            if pid:
+                stats = get_pitcher_stats_blended(pid)
+                if (stats and stats.get('era', 99) < 4.00
+                        and stats.get('whip', 9) < 1.30
+                        and stats.get('kbb', 0) > 2.0):
+                    # Check if matchup is favorable
+                    for sp_name, sp_info in week_starters.items():
+                        if normalize_name(sp_name) == norm:
+                            opp_ops = sp_info['opp_ops'][0] if sp_info['opp_ops'] else 0.720
+                            if is_high_quality_matchup(opp_ops):
+                                passes   = True
+                                reason   = f"Quality reliever getting spot start vs {sp_info['opponents'][0] if sp_info['opponents'] else 'weak offense'}"
+                                stat_str = f"ERA {stats['era']:.2f} | WHIP {stats['whip']:.2f} | K/BB {stats['kbb']:.1f}"
+                            break
+
+        # ── Check 5: Callup acceleration ────────────────────────
+        if not passes and any(w in text for w in [
+            'called up', 'promoted', 'recalled', 'expected to join',
+            'being considered', 'performing well at aaa', 'option running out'
+        ]):
+            if norm in TOP_PROSPECTS or pct_owned >= 10:
+                passes = True
+                reason = "Callup accelerated by injury — may get immediate role"
+
+        # ── Check 6: Prior season starter-caliber production ────
+        if not passes:
+            pid = get_player_id_from_name(name)
+            if pid:
+                if pos in ['SP', 'P']:
+                    prior = get_pitcher_stats(pid, date.today().year - 1)
+                    if prior and prior.get('ip', 0) >= 100 and prior.get('era', 99) < 4.20:
+                        passes   = True
+                        reason   = f"Proven starter — {prior['ip']:.0f} IP last season"
+                        stat_str = f"Prior ERA {prior['era']:.2f} | WHIP {prior['whip']:.2f}"
+                else:
+                    prior = get_hitter_stats(pid, date.today().year - 1)
+                    if prior and prior.get('pa', 0) >= 300 and prior.get('ops', 0) >= 0.740:
+                        passes   = True
+                        reason   = f"Proven hitter — {prior['pa']} PA last season"
+                        stat_str = f"Prior OPS {prior['ops']:.3f} | HR {prior['hr']}"
+
+        if not passes:
+            continue
+
+        # Final: get current stat string if not already set
+        if not stat_str:
+            pid = get_player_id_from_name(name)
+            if pid:
+                if pos in ['SP', 'RP', 'P']:
+                    s = get_pitcher_stats_blended(pid)
+                    if s and s.get('ip', 0) >= 5:
+                        stat_str = f"ERA {s['era']:.2f} | WHIP {s['whip']:.2f} | K/BB {s['kbb']:.1f}"
+                else:
+                    s = get_hitter_stats(pid)
+                    if s and s.get('pa', 0) >= 20:
+                        stat_str = f"OPS {s['ops']:.3f} | AVG {s['avg']:.3f} | HR {s['hr']}"
+
+        return {
+            'name':      canonical_name,
+            'pct_owned': pct_owned,
+            'stat_str':  stat_str,
+            'reason':    reason,
+        }
+
+    return None  # Nothing cleared the bar — suppress alert
 def _check_position_relevance(text, my_roster):
     """Check if the injured player's position is one I need."""
     pos_signals = {
@@ -2266,8 +2441,9 @@ def _game_starts_soon(game, hours=3):
 # ============================================================
 def send_waiver_drops_alert(taken, my_roster, team_ops):
     """
-    Daily 9am: Scan prior day's drops by leaguemates.
-    Alert if a dropped player is better than someone on my team.
+    Daily 9am: Scan prior day's leaguemate drops.
+    Only alert if dropped player is meaningfully better than someone on my team,
+    I have positional backup coverage, and the add is actionable.
     """
     print("Running waiver drops check...")
     recent_drops = get_waiver_drops_to_review(taken, my_roster)
@@ -2275,54 +2451,158 @@ def send_waiver_drops_alert(taken, my_roster, team_ops):
         print("  No recent drops to review")
         return
 
-    alerts = []
-    for drop in recent_drops:
-        name     = drop['name']
-        pos      = drop['position']
-        pid      = drop.get('player_id')
+    today    = date.today()
+    week_sun = sunday_of_week(today)
+    my_week_starters = get_probable_pitchers(today, week_sun, team_ops)
 
-        # Validate player exists in Yahoo and is available
+    # Build quick lookup of my roster by position
+    my_by_pos = {}
+    for p in my_roster:
+        pos = p['position']
+        if pos not in my_by_pos:
+            my_by_pos[pos] = []
+        my_by_pos[pos].append(p)
+
+    alerts = []
+
+    for drop in recent_drops:
+        name = drop['name']
+        pos  = drop['position']
+        pid  = drop.get('player_id')
+
+        # Validate exists in Yahoo and is available
         canonical, avail = validate_player_in_yahoo(name, taken)
         if not avail or canonical is None:
             continue
 
-        # Skip if position is clogged
+        # Skip clogged positions
         if pos in MY_CLOGGED_POSITIONS:
             continue
 
-        # Get player value
-        value_score = 0
-        stat_str    = ''
-        if pos in ['SP', 'RP', 'P']:
-            mlb_id = get_player_id_from_name(name) if not pid else int(pid) if pid.isdigit() else None
+        # Get stats for dropped player
+        mlb_id   = get_player_id_from_name(name)
+        stats    = None
+        stat_str = ''
+        value    = 0
+
+        is_pitcher = pos in ['SP', 'RP', 'P']
+
+        if is_pitcher:
             if mlb_id:
-                stats    = get_pitcher_stats_blended(mlb_id)
-                value_score = score_sp(stats)
+                stats = get_pitcher_stats_blended(mlb_id)
                 if stats and stats.get('ip', 0) >= 5:
+                    value    = score_sp(stats)
                     stat_str = f"ERA {stats['era']:.2f} | WHIP {stats['whip']:.2f} | K/BB {stats['kbb']:.1f}"
         else:
-            mlb_id = get_player_id_from_name(name) if not pid else int(pid) if pid.isdigit() else None
             if mlb_id:
                 stats = get_hitter_stats(mlb_id)
-                if stats:
-                    value_score = stats.get('ops', 0) * 100
-                    stat_str    = f"AVG {stats['avg']:.3f} | OPS {stats['ops']:.3f} | HR {stats['hr']}"
+                if stats and stats.get('pa', 0) >= 20:
+                    value    = stats.get('ops', 0) * 100
+                    stat_str = f"AVG {stats['avg']:.3f} | OPS {stats['ops']:.3f} | HR {stats['hr']}"
 
-        if value_score < -50:  # Not worth it
+        if not stats:
             continue
 
-        # Find who I'd drop
-        drop_cand = find_best_drop(my_roster, team_ops)
-        if not drop_cand:
+        # ── RELEVANCE GATE ───────────────────────────────────────
+        passes      = False
+        drop_target = None
+        reason      = ''
+
+        if is_pitcher:
+            # Gate A: Better long-term value than any of my pitchers
+            my_pitchers = my_by_pos.get('SP', []) + my_by_pos.get('RP', []) + my_by_pos.get('P', [])
+            for mp in my_pitchers:
+                if mp['is_undroppable'] or mp['name_normalized'] in MY_UNDROPPABLE:
+                    continue
+                mp_id    = get_player_id_from_name(mp['name'])
+                mp_stats = get_pitcher_stats_blended(mp_id) if mp_id else None
+                mp_value = score_sp(mp_stats) if mp_stats else -999
+                if value > mp_value + 5:  # Meaningfully better
+                    passes      = True
+                    drop_target = mp
+                    reason      = f"Better long-term value than {mp['name']}"
+                    break
+
+            # Gate B: Better streaming option than my worst streamer this week
+            if not passes:
+                my_streamers = [
+                    mp for mp in my_pitchers
+                    if not sp_long_term_value(mp, None) and mp['pct_owned'] < 50
+                ]
+                norm_drop = normalize_name(name)
+                drop_has_start = norm_drop in {normalize_name(k) for k in my_week_starters}
+                for mp in my_streamers:
+                    mp_norm      = normalize_name(mp['name'])
+                    mp_has_start = mp_norm in {normalize_name(k) for k in my_week_starters}
+                    mp_id        = get_player_id_from_name(mp['name'])
+                    mp_stats     = get_pitcher_stats_blended(mp_id) if mp_id else None
+                    mp_value     = score_sp(mp_stats) if mp_stats else -999
+                    # Dropped player must be better AND have a competitive start this week
+                    if value > mp_value + 5 and drop_has_start:
+                        # Verify the start is a quality matchup
+                        for sp_name, sp_info in my_week_starters.items():
+                            if normalize_name(sp_name) == norm_drop:
+                                opp_ops = sp_info['opp_ops'][0] if sp_info['opp_ops'] else 0.720
+                                if is_high_quality_matchup(opp_ops):
+                                    passes      = True
+                                    drop_target = mp
+                                    reason      = f"Better streaming option than {mp['name']} this week"
+                                break
+                    if passes:
+                        break
+
+        else:
+            # Hitter gate: better than my worst hitter at a compatible position
+            compatible_positions = _get_compatible_positions(pos)
+            for comp_pos in compatible_positions:
+                my_at_pos = my_by_pos.get(comp_pos, [])
+                for mp in my_at_pos:
+                    if mp['is_undroppable'] or mp['name_normalized'] in MY_UNDROPPABLE:
+                        continue
+                    # Must have positional backup — skip if only player at that position
+                    others_at_pos = [x for x in my_at_pos if x['name'] != mp['name']]
+                    if not others_at_pos and comp_pos not in ['Util', 'BN']:
+                        continue  # No backup — can't drop
+                    mp_id    = get_player_id_from_name(mp['name'])
+                    mp_stats = get_hitter_stats(mp_id) if mp_id else None
+                    mp_value = (mp_stats.get('ops', 0) * 100) if mp_stats else 0
+                    if value > mp_value + 8:  # Meaningfully better
+                        passes      = True
+                        drop_target = mp
+                        reason      = f"Better than {mp['name']} at {comp_pos}"
+                        break
+                if passes:
+                    break
+
+            # Also check vs worst overall hitter (Util/BN slot)
+            if not passes:
+                bench = my_by_pos.get('BN', []) + my_by_pos.get('Util', [])
+                for mp in bench:
+                    if mp['is_undroppable'] or mp['name_normalized'] in MY_UNDROPPABLE:
+                        continue
+                    mp_id    = get_player_id_from_name(mp['name'])
+                    mp_stats = get_hitter_stats(mp_id) if mp_id else None
+                    mp_value = (mp_stats.get('ops', 0) * 100) if mp_stats else 0
+                    if value > mp_value + 8:
+                        passes      = True
+                        drop_target = mp
+                        reason      = f"Upgrade over bench player {mp['name']}"
+                        break
+
+        if not passes or not drop_target:
             continue
 
         drop_ts  = drop.get('timestamp', 0)
         drop_dt  = datetime.fromtimestamp(drop_ts, tz=ET_TZ)
-        avail_dt = drop_dt + timedelta(days=2)  # Waiver period ~2 days
+        avail_dt = drop_dt + timedelta(days=2)
 
         alerts.append({
-            'name': canonical, 'pos': pos, 'stat_str': stat_str,
-            'drop': drop_cand, 'avail_date': avail_dt.strftime('%a %-m/%-d')
+            'name':       canonical,
+            'pos':        pos,
+            'stat_str':   stat_str,
+            'reason':     reason,
+            'drop':       drop_target,
+            'avail_date': avail_dt.strftime('%a %-m/%-d'),
         })
 
     if not alerts:
@@ -2332,14 +2612,32 @@ def send_waiver_drops_alert(taken, my_roster, team_ops):
     lines = ["🗑️ WAIVER DROPS — Worth considering:\n"]
     for a in alerts[:3]:
         lines.append(
-            f"• {a['name']} ({a['pos']}){' — ' + a['stat_str'] if a['stat_str'] else ''}\n"
+            f"• {a['name']} ({a['pos']})"
+            f"{' — ' + a['stat_str'] if a['stat_str'] else ''}\n"
+            f"  {a['reason']}\n"
             f"  Available: {a['avail_date']}\n"
             f"  💀 Drop: {a['drop']['name']} ({a['drop']['pct_owned']:.0f}%)"
         )
     send_pushover("🗑️ WAIVER DROPS", '\n'.join(lines), priority=0)
 
+
+def _get_compatible_positions(pos):
+    """Return list of roster positions compatible with a given player position."""
+    compat = {
+        'C':  ['C', 'Util', 'BN'],
+        '1B': ['1B', 'Util', 'BN'],
+        '2B': ['2B', 'Util', 'BN'],
+        '3B': ['3B', 'Util', 'BN'],
+        'SS': ['SS', 'Util', 'BN'],
+        'OF': ['OF', 'Util', 'BN'],
+        'SP': ['SP', 'P', 'BN'],
+        'RP': ['RP', 'P', 'BN'],
+    }
+    return compat.get(pos, ['Util', 'BN'])
+
+
 # ============================================================
-# ALERT: NEW POSITIONAL ELIGIBILITY (Daily 9am)
+# ALERT: NEW POSITIONAL ELIGIBILITY
 # ============================================================
 def check_positional_eligibility(my_roster, team_ops):
     """
