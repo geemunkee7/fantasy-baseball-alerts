@@ -508,7 +508,7 @@ def validate_player_in_yahoo(player_name, taken=None):
         data = requests.get(url, timeout=5).json()
         people = data.get('people', [])
         if not people:
-            print(f"  ⚠️ '{player_name}' not found in MLB database — suppressing alert")
+            pass  # Not in MLB database — silently suppress
             return None, False
         # Return the canonical MLB name
         canonical = people[0].get('fullName', player_name)
@@ -908,12 +908,36 @@ def get_closer_backup(team_name):
     return chart[1] if len(chart) >= 2 else None
 
 def get_closer_candidates(team_name, taken, limit=3):
-    """Return list of available closermonkey candidates for a team."""
-    chart = fetch_closermonkey().get('depth_charts', {}).get(team_name, [])
+    """
+    Return available Closermonkey candidates for a team with fantasy relevance validation.
+    Requires: ownership >= 15% OR blended ERA < 3.80 with IP >= 10 OR top prospect.
+    Scrubs suppressed.
+    """
+    chart  = fetch_closermonkey().get('depth_charts', {}).get(team_name, [])
     result = []
-    for norm in chart[1:limit+1]:
-        if norm not in taken:
-            result.append(norm.title())
+    for norm in chart[1:limit+2]:  # Check a few extra in case some fail threshold
+        if norm in taken:
+            continue
+        # Validate fantasy relevance
+        pid = get_player_id_from_name(norm.title())
+        if pid:
+            stats = get_pitcher_stats_blended(pid)
+            owned_enough = False
+            # Check ownership via free agent list
+            fa = get_league_free_agents(position='RP', count=30)
+            for p in fa:
+                if normalize_name(p['name']) == norm:
+                    if (p['pct_owned'] >= 15
+                            or norm in TOP_PROSPECTS
+                            or (stats and stats.get('era', 99) < 3.80
+                                and stats.get('ip', 0) >= 10)):
+                        owned_enough = True
+                    break
+            if not owned_enough:
+                continue
+        result.append(norm.title())
+        if len(result) >= limit:
+            break
     return result
 
 # ============================================================
@@ -1128,8 +1152,26 @@ def sync_league_transactions():
                         dest_team = str(getattr(tdata, 'destination_team_key', '') or '')
                         src_team  = str(getattr(tdata, 'source_team_key', '') or '')
                         ptype     = str(getattr(tdata, 'type', '') or '').lower()
-                        pid       = str(getattr(pl, 'player_id', '') or '')
-                        pos       = str(getattr(pl, 'primary_position', '') or '')
+                       pid       = str(getattr(pl, 'player_id', '') or '')
+                        # Try multiple position attribute paths yfpy uses
+                        pos = ''
+                        try:
+                            pos = str(pl.primary_position or '')
+                        except Exception:
+                            pass
+                        if not pos:
+                            try:
+                                pos = str(pl.eligible_positions.position or '')
+                            except Exception:
+                                pass
+                        if not pos and pid:
+                            # Fallback: lookup position from MLB API
+                            try:
+                                url  = f"https://statsapi.mlb.com/api/v1/people/{pid}?hydrate=currentTeam"
+                                data = requests.get(url, timeout=3).json()
+                                pos  = data.get('people', [{}])[0].get('primaryPosition', {}).get('abbreviation', '')
+                            except Exception:
+                                pass
                         player_info.append({
                             'name': pname, 'player_id': pid,
                             'position': pos, 'type': ptype,
@@ -1854,11 +1896,41 @@ def send_overnight_digest():
 # ============================================================
 # ALERT: CURRENT WEEK SP ANALYSIS (Monday 8:45am)
 # ============================================================
+def _get_pitchers_including_il_returns(roster, opp_roster=None, week_mon=None, week_sun=None):
+    """
+    Return set of pitcher name norms to count for start purposes.
+    Includes IL pitchers whose Yahoo expected return date falls within the current week.
+    """
+    norms = set()
+    target = roster if roster else []
+    for p in target:
+        pos = p['position']
+        if pos not in ['SP', 'P']:
+            continue
+        status = p['status'] or ''
+        if 'IL' not in status:
+            norms.add(p['name_normalized'])
+            continue
+        # On IL — check expected return date
+        return_date = p.get('injury_note', '') or ''
+        # Yahoo sometimes puts return date in status string e.g. "IL10 (DTD)" or notes
+        # Try to parse a date from the note
+        if week_mon and week_sun:
+            date_match = re.search(r'(\d{1,2})/(\d{1,2})', return_date)
+            if date_match:
+                try:
+                    ret = date(date.today().year,
+                               int(date_match.group(1)),
+                               int(date_match.group(2)))
+                    if week_mon <= ret <= week_sun:
+                        norms.add(p['name_normalized'])
+                        print(f"  IL return included: {p['name']} (returns ~{ret})")
+                except Exception:
+                    pass
+    return norms
+
+
 def send_current_week_sp_analysis(taken, my_roster, team_ops):
-    """
-    Monday 8:45am: Compare my probable starts vs opponent for the week.
-    Propose adds if I'm behind in quantity or quality.
-    """
     print("Running current week SP analysis...")
     today    = datetime.now(ET_TZ).date()
     week_mon = monday_of_week(today)
@@ -1866,38 +1938,37 @@ def send_current_week_sp_analysis(taken, my_roster, team_ops):
 
     all_starters = get_probable_pitchers(week_mon, week_sun, team_ops)
 
-    # My pitchers this week
-    my_pitcher_norms = {
-        normalize_name(p['name']) for p in my_roster
-        if p['position'] in ['SP', 'P']
-        and 'IL' not in (p['status'] or '')
-    }
+    my_pitcher_norms = _get_pitchers_including_il_returns(my_roster, week_mon=week_mon, week_sun=week_sun)
 
-    my_starts    = []
-    opp_team_id  = None
-    opp_starts   = []
+    matchup     = get_matchup_data()
+    opp_team_id = matchup.get('opp_team_id') if matchup else None
 
-    # Get opponent ID from matchup data
-    matchup = get_matchup_data()
-    if matchup:
-        opp_team_id = matchup.get('opp_team_id')
-
-    # Get opponent pitcher list if we have their team ID
     opp_pitcher_norms = set()
+    opp_roster_list   = []
     if opp_team_id:
         try:
             query      = get_yahoo_query()
-            opp_roster = query.get_team_roster_player_info_by_date(opp_team_id, today)
-            for p in (opp_roster or []):
+            raw        = query.get_team_roster_player_info_by_date(opp_team_id, today)
+            for p in (raw or []):
                 try:
-                    pos = str(getattr(p, 'primary_position', '') or '')
-                    if pos in ['SP', 'P']:
-                        name = p.name.full
-                        opp_pitcher_norms.add(normalize_name(name))
+                    pos    = str(getattr(p, 'primary_position', '') or '')
+                    name   = p.name.full
+                    status = str(getattr(p, 'status', '') or '')
+                    inj    = str(getattr(p, 'injury_note', '') or '')
+                    opp_roster_list.append({
+                        'name': name, 'name_normalized': normalize_name(name),
+                        'position': pos, 'status': status, 'injury_note': inj
+                    })
                 except Exception:
                     pass
+            opp_pitcher_norms = _get_pitchers_including_il_returns(
+                opp_roster_list, week_mon=week_mon, week_sun=week_sun
+            )
         except Exception as e:
             print(f"  Opp roster error: {e}")
+
+    my_starts  = []
+    opp_starts = []
 
     for name, info in all_starters.items():
         norm  = normalize_name(name)
@@ -1914,7 +1985,7 @@ def send_current_week_sp_analysis(taken, my_roster, team_ops):
         elif norm in opp_pitcher_norms:
             opp_starts.append(entry)
 
-    my_total  = sum(s['count'] for s in my_starts)
+    my_total = sum(s['count'] for s in my_starts)
     opp_total = sum(s['count'] for s in opp_starts)
     my_hq     = sum(s['count'] for s in my_starts if s['is_hq'])
     opp_hq    = sum(s['count'] for s in opp_starts if s['is_hq'])
@@ -1932,24 +2003,21 @@ def send_current_week_sp_analysis(taken, my_roster, team_ops):
 
     if needs_action:
         lines.append("⚠️ You're behind — scanning for adds (Mon–Wed):\n")
-        # Scan Mon-Wed available starters
         wed = week_mon + timedelta(days=2)
         early_starters = get_probable_pitchers(week_mon, wed, team_ops)
         candidates = []
         for name, info in early_starters.items():
             if normalize_name(name) in taken:
                 continue
-            if is_opener(get_pitcher_stats_blended(info['id'])):
+            stats = get_pitcher_stats_blended(info['id'])
+            if is_opener(stats):
                 continue
-            stats  = get_pitcher_stats_blended(info['id'])
-            # Validate player exists in Yahoo
             canonical, avail = validate_player_in_yahoo(name, taken)
             if not avail or canonical is None:
                 continue
-            hq     = [is_high_quality_sp(stats, ops) for ops in info.get('opp_ops', [0.720])]
-            starts = info['count']
-            value  = (
-                starts * 10
+            hq    = [is_high_quality_sp(stats, ops) for ops in info.get('opp_ops', [0.720])]
+            value = (
+                info['count'] * 10
                 + sum(5 for h in hq if h)
                 - sum(3 for ops in info.get('opp_ops', []) if ops > 0.730)
             )
@@ -1957,20 +2025,17 @@ def send_current_week_sp_analysis(taken, my_roster, team_ops):
 
         candidates.sort(key=lambda x: x[0], reverse=True)
         if candidates:
-            for val, cname, info, stats, hq in candidates[:2]:
+            for _, cname, info, stats, hq in candidates[:2]:
                 matchups = ', '.join(
                     f"{format_date(d)} vs {opp} {matchup_label(ops)}"
                     for d, opp, ops in zip(
-                        info['dates'][:3],
-                        info['opponents'][:3],
-                        info['opp_ops'][:3]
+                        info['dates'][:3], info['opponents'][:3], info['opp_ops'][:3]
                     )
                 )
                 stat_str = (f"ERA {stats['era']:.2f} | WHIP {stats['whip']:.2f} | K/BB {stats['kbb']:.1f}"
                             if stats and stats.get('ip', 0) >= 5 else "Limited stats")
                 lines.append(f"• {cname} ({info['count']} start{'s' if info['count']>1 else ''})\n"
-                              f"  {stat_str}\n  {matchups}")
-
+                             f"  {stat_str}\n  {matchups}")
             drop_cand = find_best_drop(my_roster, team_ops)
             if drop_cand:
                 lines.append(f"\n💀 Drop: {drop_cand['name']} ({drop_cand['pct_owned']:.0f}%)")
@@ -1999,10 +2064,8 @@ def send_streamers_alert(taken, my_roster, team_ops):
 
     all_starters = get_probable_pitchers(today, week_sun, team_ops)
 
-    my_pitcher_norms = {
-        normalize_name(p['name']) for p in my_roster
-        if p['position'] in ['SP', 'P']
-        and 'IL' not in (p['status'] or '')
+    my_pitcher_norms = _get_pitchers_including_il_returns(
+        my_roster, week_mon=monday_of_week(today), week_sun=week_sun)
     }
 
     my_remaining  = []
@@ -2717,95 +2780,140 @@ def check_positional_eligibility(my_roster, team_ops):
 # ============================================================
 def send_trade_suggestions(my_roster, all_rosters, team_ops):
     """
-    Friday 1pm: Compare rosters, identify fair 1v1 trade opportunities.
-    Never propose same player combo twice in 2 consecutive weeks or 2x total.
+    Friday 1pm: Identify fair trades that genuinely improve both teams.
+    Based on actual roster strengths/weaknesses, not just clogged positions.
     """
     print("Running trade suggestion analysis...")
     trade_history = load_trade_history()
+    week_ago      = datetime.now(timezone.utc).timestamp() - (14 * 86400)
 
-    # Identify my strengths and weaknesses
-    my_strengths = []
-    my_weaknesses = []
+    # Build my roster value profile by position
+    def player_value(p):
+        pid = get_player_id_from_name(p['name'])
+        if p['position'] in ['SP', 'P', 'RP']:
+            stats = get_pitcher_stats_blended(pid) if pid else None
+            return score_sp(stats) + p['pct_owned'] * 0.3
+        else:
+            stats = get_hitter_stats(pid) if pid else None
+            if stats and stats.get('pa', 0) >= 20:
+                return stats.get('ops', 0) * 80 + p['pct_owned'] * 0.3
+            return p['pct_owned'] * 0.5
 
-    for p in my_roster:
-        if p['pct_owned'] >= 80 or p['name_normalized'] in MY_UNDROPPABLE:
-            my_strengths.append(p)
-        elif p['pct_owned'] < 40 and p['position'] not in ['SP', 'RP']:
-            my_weaknesses.append(p)
+    # Score my roster by position group
+    def roster_score_by_pos(roster):
+        by_pos = {}
+        for p in roster:
+            pos = p['position']
+            if pos in ['BN', 'IL', 'Util']:
+                continue
+            if pos not in by_pos:
+                by_pos[pos] = []
+            by_pos[pos].append(player_value(p))
+        return {pos: round(sum(vals) / len(vals), 1) for pos, vals in by_pos.items() if vals}
 
-    if not my_strengths or not all_rosters:
-        print("  Not enough data for trade suggestions")
-        return
+    my_scores = roster_score_by_pos(my_roster)
+
+    # Find my weakest and strongest positions
+    hitting_pos = ['C', '1B', '2B', '3B', 'SS', 'OF']
+    pitching_pos = ['SP', 'RP']
+
+    my_weak_hit  = sorted([p for p in hitting_pos  if p in my_scores], key=lambda x: my_scores.get(x, 0))[:2]
+    my_str_hit   = sorted([p for p in hitting_pos  if p in my_scores], key=lambda x: my_scores.get(x, 0), reverse=True)[:2]
+    my_weak_pit  = sorted([p for p in pitching_pos if p in my_scores], key=lambda x: my_scores.get(x, 0))[:1]
+    my_str_pit   = sorted([p for p in pitching_pos if p in my_scores], key=lambda x: my_scores.get(x, 0), reverse=True)[:1]
+
+    my_weak  = my_weak_hit + my_weak_pit
+    my_strong = my_str_hit + my_str_pit
 
     proposals = []
-    week_ago = datetime.now(timezone.utc).timestamp() - (14 * 86400)
 
-    for team_id, their_roster in all_rosters.items():
-        if team_id == MY_TEAM_ID:
-            continue
-        if not their_roster:
+    for team_id, their_roster in (all_rosters or {}).items():
+        if team_id == MY_TEAM_ID or not their_roster:
             continue
 
-        # Find their weaknesses and strengths
-        their_strengths = [p for p in their_roster if p['pct_owned'] >= 75]
-        their_weaknesses = [p for p in their_roster if p['pct_owned'] < 40]
+        their_scores   = roster_score_by_pos(their_roster)
+        their_weak_pos = sorted(their_scores.keys(), key=lambda x: their_scores.get(x, 0))[:3]
+        their_str_pos  = sorted(their_scores.keys(), key=lambda x: their_scores.get(x, 0), reverse=True)[:3]
 
-        for my_give in my_strengths:
-            for their_give in their_strengths:
-                # Check if positions make sense as a swap
-                if my_give['position'] == their_give['position']:
-                    continue  # Same position swap rarely adds value
-                if my_give['position'] in MY_CLOGGED_POSITIONS:
-                    pass  # Good — offloading a clogged position
-                else:
+        # Look for swaps: I give from my strength → their weakness
+        #                 I get from their strength → my weakness
+        for give_pos in my_strong:
+            if give_pos not in their_weak_pos:
+                continue
+            for get_pos in my_weak:
+                if get_pos not in their_str_pos:
+                    continue
+                if give_pos == get_pos:
                     continue
 
-                # Check trade history — skip if proposed recently or twice
-                pair_key = tuple(sorted([
-                    normalize_name(my_give['name']),
-                    normalize_name(their_give['name'])
-                ]))
-                prior = [t for t in trade_history if t.get('pair') == list(pair_key)]
-                if len(prior) >= 2:
-                    continue
-                recent_prior = [t for t in prior if t.get('ts', 0) > week_ago]
-                if recent_prior:
-                    continue
-
-                # Value check — must be roughly fair
-                my_val   = my_give['pct_owned']
-                their_val = their_give['pct_owned']
-                if abs(my_val - their_val) > 30:
-                    continue
-
-                # Build rationale
-                my_pos    = my_give['position']
-                their_pos = their_give['position']
-                rationale = (
-                    f"You have depth at {my_pos} and need {their_pos} help; "
-                    f"they get a quality {my_pos} while you upgrade at {their_pos}."
+                # Find best give candidate from my roster
+                my_give_candidates = sorted(
+                    [p for p in my_roster if p['position'] == give_pos
+                     and not p['is_undroppable']
+                     and p['name_normalized'] not in MY_UNDROPPABLE
+                     and p['pct_owned'] >= 40],
+                    key=player_value, reverse=True
+                )
+                # Find best get candidate from their roster
+                their_get_candidates = sorted(
+                    [p for p in their_roster if p['position'] == get_pos
+                     and not p['is_undroppable']
+                     and p['pct_owned'] >= 40],
+                    key=player_value, reverse=True
                 )
 
+                if not my_give_candidates or not their_get_candidates:
+                    continue
+
+                my_give   = my_give_candidates[0]
+                their_get = their_get_candidates[0]
+
+                # Fairness check: values within 25 pct_owned points
+                if abs(my_give['pct_owned'] - their_get['pct_owned']) > 25:
+                    continue
+
+                # Validate incoming player fills genuine need
+                get_pos_score = my_scores.get(get_pos, 0)
+                give_pos_score = my_scores.get(give_pos, 0)
+                if give_pos_score <= get_pos_score:
+                    continue  # I'm not actually stronger at give_pos
+
+                # Trade history check
+                pair_key = tuple(sorted([
+                    normalize_name(my_give['name']),
+                    normalize_name(their_get['name'])
+                ]))
+                prior        = [t for t in trade_history if t.get('pair') == list(pair_key)]
+                recent_prior = [t for t in prior if t.get('ts', 0) > week_ago]
+                if len(prior) >= 2 or recent_prior:
+                    continue
+
+                rationale = (
+                    f"Your {give_pos} depth ({my_give['name']}) fills their {give_pos} need; "
+                    f"their {get_pos} asset ({their_get['name']}) upgrades your weakest spot."
+                )
                 proposals.append({
-                    'give': my_give['name'],
-                    'get': their_give['name'],
+                    'give': my_give['name'], 'give_pos': give_pos,
+                    'get': their_get['name'], 'get_pos': get_pos,
+                    'give_pct': my_give['pct_owned'],
+                    'get_pct': their_get['pct_owned'],
                     'rationale': rationale,
                     'pair': list(pair_key),
                 })
 
     if not proposals:
         print("  No fair trade opportunities found this week")
+        send_pushover("🔄 TRADE IDEA",
+                      "No equitable trade opportunities identified this week.", priority=0)
         return
 
-    # Pick top 1-2 proposals
     lines = ["🔄 TRADE IDEA — Friday 1pm\n"]
     for prop in proposals[:2]:
         lines.append(
-            f"📤 You give: {prop['give']}\n"
-            f"📥 You get: {prop['get']}\n"
+            f"📤 You give: {prop['give']} ({prop['give_pos']}, {prop['give_pct']:.0f}% owned)\n"
+            f"📥 You get: {prop['get']} ({prop['get_pos']}, {prop['get_pct']:.0f}% owned)\n"
             f"💡 {prop['rationale']}\n"
         )
-        # Log to history
         trade_history.append({
             'pair': prop['pair'],
             'ts':   datetime.now(timezone.utc).timestamp()
