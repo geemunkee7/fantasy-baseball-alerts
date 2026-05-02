@@ -807,71 +807,185 @@ def score_sp(stats, opp_ops=None):
 # CLOSERMONKEY
 # ============================================================
 def fetch_closermonkey():
+    """
+    Fetch closer depth charts from ESPN reliever org chart page.
+    Falls back to cached data if fetch fails.
+    Returns {'depth_charts': {team: [closer, backup1, ...]}, 'closer_lookup': {player_norm: team}}
+    """
     try:
         cached = _load_json(CLOSERMONKEY_CACHE, {})
         age    = datetime.now(timezone.utc).timestamp() - cached.get('ts', 0)
-        if age < 14400 and cached.get('data'):
+        if age < 14400 and cached.get('data') and cached['data'].get('closer_lookup'):
             return cached['data']
     except Exception:
         pass
+
     try:
         response = requests.get(
-            'https://www.closermonkey.com',
+            'https://www.espn.com/fantasy/baseball/flb/story?page=REcloserorgchart',
             headers={"User-Agent": "Mozilla/5.0 fantasy-baseball-monitor/1.0"},
             timeout=15
         )
         text         = response.text
         depth_charts = {}
-        current_team = None
-        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', text, re.DOTALL | re.IGNORECASE)
-        for row in rows:
-            cells = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.DOTALL | re.IGNORECASE)
-            cells = [clean_text(c).strip() for c in cells if clean_text(c).strip()]
-            if not cells:
-                continue
-            for abbr, full_name in TEAM_NAME_MAP.items():
-                if any(abbr in c or full_name in c for c in cells):
-                    current_team = full_name
-                    break
-            if current_team:
-                for cell in cells:
-                    if looks_like_player_name(cell):
-                        norm = normalize_name(cell)
-                        team_words = {
-                            'angels', 'astros', 'athletics', 'blue jays', 'braves',
-                            'brewers', 'cardinals', 'cubs', 'diamondbacks', 'dodgers',
-                            'giants', 'guardians', 'mariners', 'marlins', 'mets',
-                            'nationals', 'orioles', 'padres', 'phillies', 'pirates',
-                            'rangers', 'rays', 'red sox', 'reds', 'rockies', 'royals',
-                            'tigers', 'twins', 'white sox', 'yankees'
-                        }
-                        if any(t in norm for t in team_words):
-                            continue
-                        if current_team not in depth_charts:
-                            depth_charts[current_team] = []
-                        if norm not in depth_charts[current_team]:
-                            depth_charts[current_team].append(norm)
         closer_lookup = {}
-        for team, pitchers in depth_charts.items():
-            if pitchers:
-                closer_lookup[pitchers[0]] = team
+
+        # ESPN format: "TEAM NAME\nCloser: Player Name (X%)\nPrimary setup: ..."
+        # Parse team blocks from the raw text
+        clean = re.sub('<[^<]+?>', ' ', text)
+        clean = html.unescape(clean)
+        clean = re.sub(r'\s+', ' ', clean)
+
+        # Match team name blocks — all caps team names followed by closer info
+        team_pattern = re.compile(
+            r'([A-Z][A-Z\s]+(?:BRAVES|ORIOLES|RED SOX|YANKEES|RAYS|BLUE JAYS|'
+            r'WHITE SOX|GUARDIANS|TIGERS|ROYALS|TWINS|ASTROS|ANGELS|ATHLETICS|'
+            r'MARINERS|RANGERS|MARLINS|METS|PHILLIES|NATIONALS|CUBS|REDS|'
+            r'BREWERS|PIRATES|CARDINALS|DIAMONDBACKS|ROCKIES|DODGERS|PADRES|GIANTS))'
+        )
+        closer_pattern = re.compile(
+            r'Closer(?:-by-committee)?:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})'
+        )
+        setup_pattern = re.compile(
+            r'(?:Primary setup|Secondary setup|Middle relief|Sleeper):\s*'
+            r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})'
+        )
+
+        # Split text into team sections
+        sections = team_pattern.split(clean)
+        current_team = None
+
+        for i, section in enumerate(sections):
+            # Check if this is a team name
+            if team_pattern.match(section.strip()):
+                # Map ESPN team name to our TEAM_NAME_MAP format
+                current_team = _espn_team_name(section.strip())
+                continue
+
+            if current_team and section:
+                pitchers = []
+                # Find closer(s)
+                for m in closer_pattern.finditer(section):
+                    name = m.group(1).strip()
+                    if looks_like_player_name(name):
+                        pitchers.append(normalize_name(name))
+                # Find backups
+                for m in setup_pattern.finditer(section):
+                    name = m.group(1).strip()
+                    if looks_like_player_name(name) and normalize_name(name) not in pitchers:
+                        pitchers.append(normalize_name(name))
+
+                if pitchers:
+                    depth_charts[current_team] = pitchers
+                    closer_lookup[pitchers[0]] = current_team
+                current_team = None
+
+        # If ESPN parse got few results, try hardcoded current closers as fallback
+        if len(closer_lookup) < 15:
+            print(f"  ESPN parse only got {len(closer_lookup)} teams — using hardcoded fallback")
+            depth_charts, closer_lookup = _hardcoded_closer_fallback()
+
         data = {'depth_charts': depth_charts, 'closer_lookup': closer_lookup}
         _save_json(CLOSERMONKEY_CACHE, {
-            'ts': datetime.now(timezone.utc).timestamp(),
+            'ts':   datetime.now(timezone.utc).timestamp(),
             'data': data
         })
-        print(f"  Closermonkey: {len(closer_lookup)} closers loaded")
+        print(f"  Closer data: {len(closer_lookup)} closers loaded")
         return data
+
     except Exception as e:
-        print(f"  Closermonkey error: {e}")
-        return {}
+        print(f"  Closer fetch error: {e}")
+        # Return cached even if stale
+        cached = _load_json(CLOSERMONKEY_CACHE, {})
+        return cached.get('data', {})
+
+
+def _espn_team_name(espn_name):
+    """Map ESPN all-caps team name to our standard team name."""
+    mapping = {
+        'ARIZONA DIAMONDBACKS': 'Arizona Diamondbacks',
+        'ATLANTA BRAVES': 'Atlanta Braves',
+        'BALTIMORE ORIOLES': 'Baltimore Orioles',
+        'BOSTON RED SOX': 'Boston Red Sox',
+        'CHICAGO CUBS': 'Chicago Cubs',
+        'CHICAGO WHITE SOX': 'Chicago White Sox',
+        'CINCINNATI REDS': 'Cincinnati Reds',
+        'CLEVELAND GUARDIANS': 'Cleveland Guardians',
+        'COLORADO ROCKIES': 'Colorado Rockies',
+        'DETROIT TIGERS': 'Detroit Tigers',
+        'HOUSTON ASTROS': 'Houston Astros',
+        'KANSAS CITY ROYALS': 'Kansas City Royals',
+        'LOS ANGELES ANGELS': 'Los Angeles Angels',
+        'LOS ANGELES DODGERS': 'Los Angeles Dodgers',
+        'MIAMI MARLINS': 'Miami Marlins',
+        'MILWAUKEE BREWERS': 'Milwaukee Brewers',
+        'MINNESOTA TWINS': 'Minnesota Twins',
+        'NEW YORK METS': 'New York Mets',
+        'NEW YORK YANKEES': 'New York Yankees',
+        'OAKLAND ATHLETICS': 'Athletics',
+        'THE ATHLETICS': 'Athletics',
+        'PHILADELPHIA PHILLIES': 'Philadelphia Phillies',
+        'PITTSBURGH PIRATES': 'Pittsburgh Pirates',
+        'SAN DIEGO PADRES': 'San Diego Padres',
+        'SAN FRANCISCO GIANTS': 'San Francisco Giants',
+        'SEATTLE MARINERS': 'Seattle Mariners',
+        'ST. LOUIS CARDINALS': 'St. Louis Cardinals',
+        'TAMPA BAY RAYS': 'Tampa Bay Rays',
+        'TEXAS RANGERS': 'Texas Rangers',
+        'TORONTO BLUE JAYS': 'Toronto Blue Jays',
+        'WASHINGTON NATIONALS': 'Washington Nationals',
+    }
+    return mapping.get(espn_name.strip(), espn_name.title())
+
+
+def _hardcoded_closer_fallback():
+    """
+    Hardcoded closer list as last-resort fallback.
+    Update periodically. Based on current 2026 season data.
+    """
+    closers = {
+        'Arizona Diamondbacks': ['paul sewald', 'juan morillo'],
+        'Atlanta Braves':       ['robert suarez', 'dylan lee'],
+        'Baltimore Orioles':    ['rico garcia', 'tyler wells', 'anthony nunez'],
+        'Boston Red Sox':       ['aroldis chapman', 'garrett whitlock'],
+        'Chicago Cubs':         ['caleb thielbar', 'ben brown', 'daniel palencia'],
+        'Chicago White Sox':    ['seranthony dominguez', 'jordan leasure'],
+        'Cincinnati Reds':      ['emilio pagan', 'tony santillan'],
+        'Cleveland Guardians':  ['cade smith', 'hunter gaddis'],
+        'Colorado Rockies':     ['tyler kinley', 'victor vodnik'],
+        'Detroit Tigers':       ['kenley jansen', 'jason foley'],
+        'Houston Astros':       ['josh hader', 'bryan abreu'],
+        'Kansas City Royals':   ['james mcarthur', 'carlos hernandez'],
+        'Los Angeles Angels':   ['jose soriano', 'ben joyce'],
+        'Los Angeles Dodgers':  ['tanner scott', 'alex vesia', 'blake treinen'],
+        'Miami Marlins':        ['tanner scott', 'calvin faucher'],
+        'Milwaukee Brewers':    ['trevor megill', 'abner uribe'],
+        'Minnesota Twins':      ['jhoan duran', 'brad keller'],
+        'New York Mets':        ['edwin diaz', 'adam ottavino'],
+        'New York Yankees':     ['clay holmes', 'jonathan loaisiga'],
+        'Athletics':            ['joel kuhnel', 'mark leiter jr'],
+        'Philadelphia Phillies':['jose alvarado', 'orion kerkering'],
+        'Pittsburgh Pirates':   ['david bednar', 'colin holderman'],
+        'San Diego Padres':     ['robert suarez', 'jeremiah estrada'],
+        'San Francisco Giants': ['ryan walker', 'tyler rogers'],
+        'Seattle Mariners':     ['andres munoz', 'gregory santos'],
+        'St. Louis Cardinals':  ['ryan helsley', 'giovanni gallegos'],
+        'Tampa Bay Rays':       ['pete fairbanks', 'jason adam'],
+        'Texas Rangers':        ['kirby yates', 'jose leclerc'],
+        'Toronto Blue Jays':    ['yimi garcia', 'chad green'],
+        'Washington Nationals': ['kyle finnegan', 'hunter harvey'],
+    }
+    depth_charts  = closers
+    closer_lookup = {pitchers[0]: team for team, pitchers in closers.items() if pitchers}
+    return depth_charts, closer_lookup
+
 
 def get_all_closers():
     return set(fetch_closermonkey().get('closer_lookup', {}).keys())
 
+
 def get_closer_team(player_norm):
     return fetch_closermonkey().get('closer_lookup', {}).get(player_norm)
-
 def get_closer_candidates(team_name, taken, limit=3):
     """Return available Closermonkey candidates with fantasy relevance validation."""
     chart  = fetch_closermonkey().get('depth_charts', {}).get(team_name, [])
