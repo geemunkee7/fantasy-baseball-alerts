@@ -1579,9 +1579,15 @@ def process_breaking_news(news, taken, my_roster, team_ops):
 
         if any(kw in text for kw in MINOR_INJURY_KEYWORDS): continue
 
-        all_closers         = get_all_closers()
-        is_confirmed_closer = player_norm in all_closers
         closer_role_change  = any(kw in text for kw in CLOSER_KEYWORDS)
+        is_injury           = any(kw in text for kw in INJURY_KEYWORDS)
+        # Only fetch closer data if article is actually closer-related — avoids slow fetch on every item
+        if closer_role_change or is_injury:
+            all_closers         = get_all_closers()
+            is_confirmed_closer = player_norm in all_closers
+        else:
+            all_closers         = set()
+            is_confirmed_closer = False
         role_loss           = any(w in text for w in ['optioned','demoted','placed on il','injured list','released','suspended'])
 
         # ── CLOSER ON IL ────────────────────────────────────────
