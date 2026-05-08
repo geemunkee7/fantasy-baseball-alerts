@@ -647,7 +647,7 @@ def validate_player_in_yahoo(player_name, taken=None):
 def get_league_free_agents(position=None, count=25):
     try:
         query   = get_yahoo_query()
-        players = query.get_league_players(count, position_filter=position, status_filter='FA')
+        players = query.get_league_players(count, status_filter='FA')
         result  = []
         for p in (players or []):
             try:
