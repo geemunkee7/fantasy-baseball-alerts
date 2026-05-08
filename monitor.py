@@ -579,7 +579,12 @@ def get_all_rosters():
         taken       = set()
         my_roster   = []
         all_rosters = {}
+        fetch_start = datetime.now(timezone.utc)
         for team_id in range(1, 13):
+            # Abort if total roster fetch is taking too long (Railway timeout protection)
+            if (datetime.now(timezone.utc) - fetch_start).total_seconds() > 45:
+                print(f"  ⚠️ Roster fetch timeout after {team_id-1} teams — using partial data")
+                break
             try:
                 roster = query.get_team_roster_player_info_by_date(team_id, today)
                 if not roster: continue
