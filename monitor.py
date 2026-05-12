@@ -2703,7 +2703,7 @@ def main():
 
     print("\n--- BREAKING NEWS CHECK ---")
     ensure_team_ops()
-    news = get_all_news(lookback_minutes=20)
+    news = get_all_news(lookback_minutes=40)
     if ensure_rosters():
         process_breaking_news(news, taken, my_roster, team_ops)
         try: sync_league_transactions()
