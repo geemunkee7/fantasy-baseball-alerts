@@ -2103,7 +2103,7 @@ def send_start_sit_alert(my_roster, team_ops, taken, matchup_data=None):
         is_hq     = is_high_quality_sp(stats, opp_ops)
         long_term = sp_long_term_value(p, stats)
 
-       if is_hq:
+        if is_hq:
             # Good or better matchup = always start
             start_notes.append(f"✅ START: {name} vs {opp_name} {matchup_label(opp_ops)}")
         elif tier == 'elite':
