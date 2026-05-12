@@ -573,21 +573,18 @@ def get_yahoo_query():
     )
 
 def get_all_rosters():
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     try:
-        query       = get_yahoo_query()
-        today       = date.today()
+        query = get_yahoo_query()
+        today = date.today()
         taken       = set()
         my_roster   = []
         all_rosters = {}
-        fetch_start = datetime.now(timezone.utc)
-        for team_id in range(1, 13):
-            # Abort if total roster fetch is taking too long (Railway timeout protection)
-            if (datetime.now(timezone.utc) - fetch_start).total_seconds() > 45:
-                print(f"  ⚠️ Roster fetch timeout after {team_id-1} teams — using partial data")
-                break
+
+        def fetch_team(team_id):
             try:
                 roster = query.get_team_roster_player_info_by_date(team_id, today)
-                if not roster: continue
+                if not roster: return team_id, []
                 team_players = []
                 for player in roster:
                     try: name = player.name.full
@@ -595,10 +592,8 @@ def get_all_rosters():
                         try: name = str(player.name)
                         except Exception: name = None
                     if not name: continue
-                    norm = normalize_name(name)
-                    taken.add(norm)
                     pdata = {
-                        'name': name, 'name_normalized': norm,
+                        'name': name, 'name_normalized': normalize_name(name),
                         'position': str(getattr(player, 'primary_position', '') or ''),
                         'pct_owned': float(getattr(player.percent_owned, 'value', 0) or 0) if hasattr(player, 'percent_owned') else 0.0,
                         'is_undroppable': int(getattr(player, 'is_undroppable', 0) or 0),
@@ -615,10 +610,22 @@ def get_all_rosters():
                             pdata['eligible_positions'] = [str(getattr(p, 'position', p)) for p in (ep if isinstance(ep, list) else [ep])]
                     except Exception: pass
                     team_players.append(pdata)
-                    if team_id == MY_TEAM_ID: my_roster.append(pdata)
-                all_rosters[team_id] = team_players
+                return team_id, team_players
             except Exception as e:
                 print(f"  Team {team_id} error: {e}")
+                return team_id, []
+
+        with ThreadPoolExecutor(max_workers=12) as executor:
+            futures = {executor.submit(fetch_team, tid): tid for tid in range(1, 13)}
+            for future in as_completed(futures, timeout=45):
+                team_id, team_players = future.result()
+                if not team_players: continue
+                all_rosters[team_id] = team_players
+                for pdata in team_players:
+                    taken.add(pdata['name_normalized'])
+                    if team_id == MY_TEAM_ID:
+                        my_roster.append(pdata)
+
         if len(taken) < MIN_EXPECTED_ROSTERED:
             print(f"  ⚠️ Only {len(taken)} players")
             send_pushover("⚠️ SYSTEM WARNING", f"Yahoo returned only {len(taken)} players.", priority=0)
