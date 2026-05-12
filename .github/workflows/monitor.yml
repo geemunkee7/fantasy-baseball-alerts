@@ -2,7 +2,7 @@ name: Fantasy Baseball Monitor
 
 on:
   schedule:
-    - cron: '*/15 6-23 * * *'
+    - cron: '*/35 * * * *'
   workflow_dispatch:
   push:
     branches:
