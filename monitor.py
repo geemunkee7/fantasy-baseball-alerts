@@ -1710,7 +1710,7 @@ def send_overnight_digest():
 # IL RETURN + ROSTER PITCHER HELPERS
 # ============================================================
 def _get_pitchers_including_il_returns(roster, week_mon=None, week_sun=None):
-    norms  = set()
+    norms = set()
     for p in (roster or []):
         if p.get('position', '') not in ['SP', 'P']: continue
         if 'IL' not in (p.get('status', '') or ''):
@@ -1727,8 +1727,72 @@ def _get_pitchers_including_il_returns(roster, week_mon=None, week_sun=None):
                 except Exception: pass
     return norms
 
+def _get_team_schedule(team_name, start_date, end_date, team_ops):
+    """Get all scheduled games for a team in a date range."""
+    try:
+        data    = get_schedule(str(start_date), str(end_date))
+        games   = []
+        avg_ops = get_opp_ops_tiers()['average']
+        for day in data.get('dates', []):
+            for game in day.get('games', []):
+                teams = game.get('teams', {})
+                home  = teams.get('home', {}).get('team', {}).get('name', '')
+                away  = teams.get('away', {}).get('team', {}).get('name', '')
+                if team_name not in (home, away): continue
+                opp_name = away if team_name == home else home
+                games.append({'date': day.get('date', ''), 'opponent': opp_name,
+                              'opp_ops': team_ops.get(opp_name, avg_ops)})
+        return games
+    except Exception:
+        return []
+
+def _count_roster_starts(roster_norms, roster, all_starters, start_date, end_date, team_ops):
+    """
+    Count starts for a roster's pitchers.
+    Step 1: confirmed probables from MLB feed.
+    Step 2: rostered SPs not yet in probables — count their team's scheduled games.
+    This ensures bench SPs and unannounced probables are counted correctly.
+    """
+    entries   = []
+    accounted = set()
+
+    # Step 1: confirmed probables
+    for name, info in all_starters.items():
+        norm = normalize_name(name)
+        if norm not in roster_norms: continue
+        stats = get_pitcher_stats_blended(info['id'])
+        is_hq = any(is_high_quality_sp(stats, ops) for ops in info.get('opp_ops', [0.730]))
+        entries.append({'name': name, 'count': info['count'], 'stats': stats, 'is_hq': is_hq,
+                        'dates': info['dates'], 'opponents': info['opponents'],
+                        'opp_ops': info['opp_ops'], 'confirmed': True})
+        accounted.add(norm)
+
+    # Step 2: rostered SPs not yet in probables feed
+    if roster:
+        for p in roster:
+            if p.get('position', '') not in ['SP', 'P']: continue
+            if 'IL' in (p.get('status', '') or ''): continue
+            norm = p['name_normalized']
+            if norm not in roster_norms or norm in accounted: continue
+            team_name = TEAM_NAME_MAP.get(p.get('team_abbr', ''), '')
+            if not team_name: continue
+            games = _get_team_schedule(team_name, start_date, end_date, team_ops)
+            if not games: continue
+            pid   = get_player_id_from_name(p['name'])
+            stats = get_pitcher_stats_blended(pid) if pid else None
+            is_hq = any(is_high_quality_sp(stats, g['opp_ops']) for g in games)
+            entries.append({
+                'name': p['name'], 'count': len(games), 'stats': stats, 'is_hq': is_hq,
+                'dates': [g['date'] for g in games], 'opponents': [g['opponent'] for g in games],
+                'opp_ops': [g['opp_ops'] for g in games], 'confirmed': False,
+            })
+            accounted.add(norm)
+            print(f"  Unconfirmed start added: {p['name']} ({len(games)} games)")
+
+    return entries
+
 def _build_opp_pitcher_norms(opp_team_id, today, week_mon, week_sun):
-    if not opp_team_id: return set()
+    if not opp_team_id: return set(), []
     try:
         query           = get_yahoo_query()
         opp_roster_raw  = query.get_team_roster_player_info_by_date(opp_team_id, today)
@@ -1739,14 +1803,15 @@ def _build_opp_pitcher_norms(opp_team_id, today, week_mon, week_sun):
                     'name': p.name.full, 'name_normalized': normalize_name(p.name.full),
                     'position': str(getattr(p, 'primary_position', '') or ''),
                     'status': str(getattr(p, 'status', '') or ''),
-                    'injury_note': str(getattr(p, 'injury_note', '') or '')
+                    'injury_note': str(getattr(p, 'injury_note', '') or ''),
+                    'team_abbr': str(getattr(p, 'editorial_team_abbr', '') or ''),
                 })
             except Exception: pass
-        return _get_pitchers_including_il_returns(opp_roster_list, week_mon=week_mon, week_sun=week_sun)
+        opp_norms = _get_pitchers_including_il_returns(opp_roster_list, week_mon=week_mon, week_sun=week_sun)
+        return opp_norms, opp_roster_list
     except Exception as e:
         print(f"  Opp roster error: {e}")
-        return set()
-
+        return set(), []
 # ============================================================
 # ALERT: CURRENT WEEK SP ANALYSIS (Monday 8:45am)
 # ============================================================
@@ -1758,23 +1823,15 @@ def send_current_week_sp_analysis(taken, my_roster, team_ops):
     min_ip   = get_min_ip_for_significance()
     h2h_t    = get_h2h_margin_thresholds()
 
-    all_starters  = get_probable_pitchers(week_mon, week_sun, team_ops)
-    my_norms      = _get_pitchers_including_il_returns(my_roster, week_mon=week_mon, week_sun=week_sun)
+    all_starters = get_probable_pitchers(week_mon, week_sun, team_ops)
+    my_norms     = _get_pitchers_including_il_returns(my_roster, week_mon=week_mon, week_sun=week_sun)
 
     matchup     = get_matchup_data()
     opp_team_id = matchup.get('opp_team_id') if matchup else None
-    opp_norms   = _build_opp_pitcher_norms(opp_team_id, today, week_mon, week_sun)
+    opp_norms, opp_roster_list = _build_opp_pitcher_norms(opp_team_id, today, week_mon, week_sun)
 
-    my_starts  = []
-    opp_starts = []
-    for name, info in all_starters.items():
-        norm  = normalize_name(name)
-        stats = get_pitcher_stats_blended(info['id'])
-        is_hq = any(is_high_quality_sp(stats, ops) for ops in info.get('opp_ops', [0.730]))
-        entry = {'name': name, 'count': info['count'], 'stats': stats, 'is_hq': is_hq,
-                 'dates': info['dates'], 'opponents': info['opponents'], 'opp_ops': info['opp_ops']}
-        if norm in my_norms:      my_starts.append(entry)
-        elif norm in opp_norms:   opp_starts.append(entry)
+    my_starts  = _count_roster_starts(my_norms, my_roster, all_starters, week_mon, week_sun, team_ops)
+    opp_starts = _count_roster_starts(opp_norms, opp_roster_list, all_starters, week_mon, week_sun, team_ops)
 
     my_total  = sum(s['count'] for s in my_starts)
     opp_total = sum(s['count'] for s in opp_starts)
