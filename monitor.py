@@ -1097,7 +1097,59 @@ def looks_like_player_name(text):
     return not any(w.lower() in non_name for w in words)
 
 def extract_player_name(title, summary, source=''):
-    COLON_SOURCES = {'Rotowire', 'MLB Trade Rumors'}
+    COLON_SOURCES  = {'Rotowire', 'MLB Trade Rumors'}
+    REDDIT_SOURCES = {'r/fantasybaseball', 'r/baseball'}
+
+    if source in REDDIT_SOURCES:
+        full_text = clean_text(title + ' ' + summary)
+        # Reddit: only process if explicit transaction/injury language present
+        if not any(v in full_text.lower() for v in [
+            'placed on il', 'placed on the il', 'goes on il', 'called up',
+            'promoted', 'recalled', 'designated', 'released', 'activated',
+            'closing role', 'closer', 'saves', 'injury', 'injured',
+            'out for', 'surgery', 'torn', 'fracture', 'day-to-day'
+        ]):
+            return None
+        common_first_words = {
+            'waiver', 'wire', 'daily', 'weekly', 'fantasy', 'baseball',
+            'trade', 'free', 'add', 'drop', 'best', 'worst', 'top',
+            'breaking', 'injury', 'update', 'report', 'help', 'what',
+            'who', 'should', 'will', 'how', 'why', 'when', 'just',
+            'new', 'hot', 'cold', 'good', 'bad', 'big', 'great', 'need',
+        }
+        candidates = re.findall(r'\b([A-Z][a-z\']+\s+[A-Z][a-z\']+)\b', full_text)
+        for c in candidates:
+            if not looks_like_player_name(c): continue
+            words = c.lower().split()
+            if any(w in INVALID_NAME_WORDS for w in words): continue
+            if any(w in ACTION_VERBS for w in words):       continue
+            if c.lower() in MINOR_LEAGUE_TEAMS:              continue
+            if normalize_name(c) in KNOWN_MEDIA_NAMES:       continue
+            if words[0] in common_first_words:               continue
+            return c
+        return None
+
+    if source in COLON_SOURCES and ':' in title:
+        candidate = title.split(':')[0].strip()
+        if looks_like_player_name(candidate):
+            words = candidate.lower().split()
+            if not any(w in INVALID_NAME_WORDS for w in words):
+                if not any(w in ACTION_VERBS for w in words):
+                    if candidate.lower() not in MINOR_LEAGUE_TEAMS:
+                        if normalize_name(candidate) not in KNOWN_MEDIA_NAMES:
+                            return candidate
+
+    full_text  = clean_text(title + ' ' + summary)
+    candidates = re.findall(r'\b([A-Z][a-z\']+(?:\s+[A-Z][a-z\']+){1,3})\b', full_text)
+    for c in candidates:
+        if not looks_like_player_name(c): continue
+        words = c.lower().split()
+        if any(w in INVALID_NAME_WORDS for w in words): continue
+        if any(w in ACTION_VERBS for w in words):       continue
+        if c.lower() in MINOR_LEAGUE_TEAMS:              continue
+        if normalize_name(c) in KNOWN_MEDIA_NAMES:       continue
+        return c
+    return None
     if source in COLON_SOURCES and ':' in title:
         candidate = title.split(':')[0].strip()
         if looks_like_player_name(candidate):
@@ -1892,18 +1944,10 @@ def send_streamers_alert(taken, my_roster, team_ops):
     my_norms     = _get_pitchers_including_il_returns(my_roster, week_mon=week_mon, week_sun=week_sun)
 
     opp_team_id = matchup.get('opp_team_id') if matchup else None
-    opp_norms   = _build_opp_pitcher_norms(opp_team_id, today, week_mon, week_sun)
+    opp_norms, opp_roster_list = _build_opp_pitcher_norms(opp_team_id, today, week_mon, week_sun)
 
-    my_remaining  = []
-    opp_remaining = []
-    for name, info in all_starters.items():
-        norm  = normalize_name(name)
-        stats = get_pitcher_stats_blended(info['id'])
-        is_hq = any(is_high_quality_sp(stats, ops) for ops in info.get('opp_ops', [0.730]))
-        entry = {'name': name, 'count': info['count'], 'is_hq': is_hq, 'stats': stats,
-                 'dates': info['dates'], 'opponents': info['opponents'], 'opp_ops': info['opp_ops']}
-        if norm in my_norms:      my_remaining.append(entry)
-        elif norm in opp_norms:   opp_remaining.append(entry)
+    my_remaining  = _count_roster_starts(my_norms, my_roster, all_starters, today, week_sun, team_ops)
+    opp_remaining = _count_roster_starts(opp_norms, opp_roster_list, all_starters, today, week_sun, team_ops)
 
     my_starts  = sum(s['count'] for s in my_remaining)
     opp_starts = sum(s['count'] for s in opp_remaining)
@@ -2059,24 +2103,31 @@ def send_start_sit_alert(my_roster, team_ops, taken, matchup_data=None):
         is_hq     = is_high_quality_sp(stats, opp_ops)
         long_term = sp_long_term_value(p, stats)
 
-        if tier == 'elite':
+       if is_hq:
+            # Good or better matchup = always start
+            start_notes.append(f"✅ START: {name} vs {opp_name} {matchup_label(opp_ops)}")
+        elif tier == 'elite':
+            # Elite pitcher: only consider sitting vs elite offense if winning ratios
             if opp_ops > t_ops['strong'] and winning_ratios:
-                start_notes.append(f"⚠️ CONSIDER SIT: {name} vs {opp_name} {matchup_label(opp_ops)} — elite offense + you're leading ratios. Your call.")
+                start_notes.append(f"⚠️ CONSIDER SIT: {name} vs {opp_name} {matchup_label(opp_ops)} — elite offense + you're leading ERA/WHIP. Your call.")
             else:
                 start_notes.append(f"✅ START: {name} vs {opp_name} {matchup_label(opp_ops)}")
         elif tier in ('above_avg', 'average'):
-            if is_hq:
-                start_notes.append(f"✅ START: {name} vs {opp_name} {matchup_label(opp_ops)}")
-            elif opp_ops > t_ops['strong']:
+            # Mid-tier: sit if tough matchup AND not losing ratios AND long term value
+            if opp_ops > t_ops['strong']:
                 if losing_ratios:
-                    start_notes.append(f"⚠️ START (need ratios): {name} vs {opp_name} {matchup_label(opp_ops)} — tough matchup but you're losing ERA/WHIP.")
+                    start_notes.append(f"⚠️ START: {name} vs {opp_name} {matchup_label(opp_ops)} — tough matchup but you need ERA/WHIP help.")
                 elif long_term:
-                    start_notes.append(f"⚠️ SIT?: {name} vs {opp_name} {matchup_label(opp_ops)} — tough matchup. Sit if protecting ERA/WHIP lead.")
+                    start_notes.append(f"⚠️ SIT?: {name} vs {opp_name} {matchup_label(opp_ops)} — tough matchup. Consider sitting to protect ratios.")
                 else:
-                    sit_alerts.append({'name': name, 'opp': opp_name, 'opp_ops': opp_ops, 'long_term': long_term, 'stats': stats, 'p': p})
+                    sit_alerts.append({'name': name, 'opp': opp_name, 'opp_ops': opp_ops,
+                                       'long_term': long_term, 'stats': stats, 'p': p})
+            else:
+                start_notes.append(f"✅ START: {name} vs {opp_name} {matchup_label(opp_ops)}")
         else:
-            if is_hq: start_notes.append(f"✅ START: {name} vs {opp_name} {matchup_label(opp_ops)} — good matchup")
-            else:      sit_alerts.append({'name': name, 'opp': opp_name, 'opp_ops': opp_ops, 'long_term': long_term, 'stats': stats, 'p': p})
+            # Below avg / replacement: sit unless matchup is explicitly good (already caught above)
+            sit_alerts.append({'name': name, 'opp': opp_name, 'opp_ops': opp_ops,
+                               'long_term': long_term, 'stats': stats, 'p': p})
 
     if not sit_alerts and not start_notes:
         print("  No SP starts today")
@@ -2088,7 +2139,7 @@ def send_start_sit_alert(my_roster, team_ops, taken, matchup_data=None):
     for alert in sit_alerts:
         stat_str = ''
         if alert['stats'] and alert['stats'].get('ip', 0) >= min_ip:
-            stat_str = f"ERA {alert['stats']['era']:.2f} | WHIP {alert['stats']['whip']:.2f} | Tier: {get_sp_tier(alert['stats'])}"
+            stat_str = f"ERA {alert['stats']['era']:.2f} | WHIP {alert['stats']['whip']:.2f}"
         lines.append(f"❌ SIT: {alert['name']} vs {alert['opp']} {matchup_label(alert['opp_ops'])}{' — ' + stat_str if stat_str else ''}")
         if not alert['long_term']:
             for avail_name, avail_info in all_starters.items():
@@ -2348,12 +2399,43 @@ def send_waiver_drops_alert(taken, my_roster, team_ops):
 
     if not alerts: print("  No meaningful waiver drops found"); return
 
+    # Group by drop target
+    by_drop = {}
+    for a in alerts[:4]:
+        drop_key = a['drop']['name']
+        if drop_key not in by_drop:
+            by_drop[drop_key] = {'drop': a['drop'], 'adds': [], 'avail_date': a['avail_date']}
+        by_drop[drop_key]['adds'].append(a)
+
     lines = ["🗑️ WAIVER DROPS — Worth considering:\n"]
-    for a in alerts[:3]:
-        stash_label = " 🏥 IL STASH" if a.get('stash') else ""
-        lines.append(f"• {a['name']} ({a['pos']}){stash_label}{' — ' + a['stat_str'] if a['stat_str'] else ''}\n"
-                     f"  {a['reason']}\n  Available: {a['avail_date']}\n"
-                     f"  💀 Drop/move: {a['drop']['name']} ({a['drop'].get('pct_owned', 0):.0f}%)")
+    for drop_name, group in list(by_drop.items())[:3]:
+        adds     = group['adds']
+        stash    = any(a.get('stash') for a in adds)
+        drop_p   = group['drop']
+        avail_dt = group['avail_date']
+
+        if stash:
+            a = adds[0]
+            lines.append(f"🏥 IL STASH: {a['name']} ({a['pos']})"
+                         f"{' — ' + a['stat_str'] if a['stat_str'] else ''}\n"
+                         f"  {a['reason']}\n  Available: {avail_dt}\n"
+                         f"  💀 Drop/move: {drop_name} ({drop_p.get('pct_owned', 0):.0f}%)")
+        else:
+            if len(adds) == 1:
+                a = adds[0]
+                lines.append(f"• {a['name']} ({a['pos']})"
+                             f"{' — ' + a['stat_str'] if a['stat_str'] else ''}\n"
+                             f"  Available: {avail_dt}\n"
+                             f"  💀 Drop: {drop_name} ({drop_p.get('pct_owned', 0):.0f}%)")
+            else:
+                add_strs = ' or '.join(
+                    f"{a['name']} ({a['stat_str']})" if a['stat_str'] else a['name']
+                    for a in adds
+                )
+                lines.append(f"• Add: {add_strs}\n"
+                             f"  Available: {avail_dt}\n"
+                             f"  💀 Drop: {drop_name} ({drop_p.get('pct_owned', 0):.0f}%)")
+
     send_pushover("🗑️ WAIVER DROPS", '\n'.join(lines), priority=0)
 
 # ============================================================
